@@ -48,6 +48,15 @@ body {
   overflow-x: hidden;
 }
 
+/* #root es hijo flex del body: sin ancho fijo se encogía al ancho de su contenido, y las
+   pantallas con poco texto (nuevo ticket, métricas, ajustes) se veían más angostas que las
+   de proyectos y tickets. Ocupa todo el ancho y centra la app en pantallas grandes. */
+#root {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
 /* Container que emula una experiencia App Móvil nativa */
 .mobile-app-wrapper {
   width: 100%;
