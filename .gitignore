@@ -31,3 +31,7 @@ dist-ssr
 # Scripts de prueba locales contra el servidor GLPI (contienen credenciales)
 test_*.js
 all_tasks.json
+
+# Certificados SSL (solo en el servidor, se montan como volumen)
+certs/*
+!certs/README.md

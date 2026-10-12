@@ -5,3 +5,6 @@ dist
 *.log
 .vscode
 .idea
+
+# Certificados SSL: se montan como volumen, no van dentro de la imagen
+certs
