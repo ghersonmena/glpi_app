@@ -1,6 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { GLPISession } from '../types/glpi';
-import { Server, User, Moon, Sun, LogOut, CheckCircle2 } from 'lucide-react';
+import { Server, User, Moon, Sun, Smartphone, LogOut, CheckCircle2 } from 'lucide-react';
+import { getThemePreference, setThemePreference } from '../theme';
+import type { ThemePreference } from '../theme';
+
+const THEME_OPTIONS: { value: ThemePreference; label: string; icon: React.ReactNode }[] = [
+  { value: 'system', label: 'Sistema', icon: <Smartphone size={14} /> },
+  { value: 'light', label: 'Claro', icon: <Sun size={14} /> },
+  { value: 'dark', label: 'Oscuro', icon: <Moon size={14} /> }
+];
 
 interface SettingsProps {
   session: GLPISession;
@@ -8,16 +16,12 @@ interface SettingsProps {
 }
 
 export const Settings: React.FC<SettingsProps> = ({ session, onLogout }) => {
-  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+  const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.setAttribute('data-theme', 'dark');
-    } else {
-      root.removeAttribute('data-theme');
-    }
-  }, [theme]);
+  const changeTheme = (pref: ThemePreference) => {
+    setTheme(pref);
+    setThemePreference(pref);
+  };
 
   const envUrl = import.meta.env.VITE_GLPI_URL;
   const envAppToken = import.meta.env.VITE_GLPI_APP_TOKEN;
@@ -85,32 +89,47 @@ export const Settings: React.FC<SettingsProps> = ({ session, onLogout }) => {
         </div>
       </div>
 
-      {/* Preferencia de Tema */}
+      {/* Preferencia de Tema: por defecto sigue el del sistema del teléfono */}
       <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {theme === 'dark' ? <Moon size={20} color="#6366f1" /> : <Sun size={20} color="#f59e0b" />}
-            <div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>Modo Oscuro</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Cambiar apariencia visual de la app</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+          {theme === 'dark' ? <Moon size={20} color="#6366f1" /> : theme === 'light' ? <Sun size={20} color="#f59e0b" /> : <Smartphone size={20} color="var(--primary)" />}
+          <div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>Apariencia</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              {theme === 'system' ? 'Sigue el modo claro/oscuro de tu teléfono' : 'Tema fijo, sin importar el del teléfono'}
             </div>
           </div>
+        </div>
 
-          <button
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            style={{
-              padding: '6px 14px',
-              borderRadius: '20px',
-              border: '1px solid var(--border-color)',
-              background: 'var(--bg-main)',
-              color: 'var(--text-main)',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              cursor: 'pointer'
-            }}
-          >
-            {theme === 'dark' ? 'Activado' : 'Desactivado'}
-          </button>
+        <div style={{ display: 'flex', gap: '6px', padding: '4px', background: 'var(--bg-main)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+          {THEME_OPTIONS.map(option => {
+            const selected = theme === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => changeTheme(option.value)}
+                style={{
+                  flex: 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '8px 4px',
+                  borderRadius: '9px',
+                  border: 'none',
+                  background: selected ? 'var(--card-bg)' : 'transparent',
+                  boxShadow: selected ? 'var(--shadow-sm)' : 'none',
+                  color: selected ? 'var(--primary)' : 'var(--text-muted)',
+                  fontWeight: 700,
+                  fontSize: '0.78rem',
+                  cursor: 'pointer'
+                }}
+              >
+                {option.icon} {option.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
