@@ -1,4 +1,4 @@
-import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask } from '../types/glpi';
+import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote } from '../types/glpi';
 
 // Status labels & helper functions
 export const GLPI_STATUS_MAP: Record<number, { label: string; color: string; bg: string }> = {
@@ -882,6 +882,124 @@ export class GLPIService {
    * Concluye un Hito o Tarea con 1 solo clic:
    * Guarda automáticamente en GLPI: percent_done = 100%, state = 3 (closed), real_end_date = fecha actual
    */
+  /**
+   * GLPI guarda el contenido de las notas como HTML (a veces con las entidades escapadas,
+   * p. ej. "&lt;p&gt;"). Se convierte a texto plano sin interpretar el HTML en la página.
+   */
+  private static htmlToPlainText(html: string): string {
+    if (!html) return '';
+    // DOMParser no ejecuta scripts ni carga recursos: solo se usa para extraer texto
+    const textOf = (value: string) =>
+      new DOMParser().parseFromString(value, 'text/html').documentElement.textContent || '';
+    // Si las etiquetas vienen escapadas ("&lt;p&gt;"), primero se decodifican
+    const source = /&lt;[a-z/]/i.test(html) ? textOf(html) : html;
+    const withBreaks = source.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n');
+    return textOf(withBreaks).replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  /** Texto plano → HTML seguro para GLPI (escapa caracteres y respeta saltos de línea). */
+  private static plainTextToHtml(text: string): string {
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+    return escaped
+      .split(/\n{2,}/)
+      .map(paragraph => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
+      .join('');
+  }
+
+  private static mapRawNote(item: any): GLPINote {
+    const user = item.users_id;
+    return {
+      id: Number(item.id),
+      content: this.htmlToPlainText(String(item.content || '')),
+      date: item.date || item.date_creation || item.date_mod || '',
+      // Con expand_dropdowns, users_id llega como nombre; si llega como número no hay nombre
+      user_name: typeof user === 'string' && !/^\d+$/.test(user) ? user : undefined
+    };
+  }
+
+  /**
+   * Notas (Notepad) de una tarea de proyecto, de la más reciente a la más antigua.
+   * Las notas se guardan como registros independientes en GLPI, así que forman un historial.
+   */
+  static async getTaskNotes(session: GLPISession, taskId: number): Promise<GLPINote[]> {
+    if (session.isMock) {
+      return [...(MOCK_TASK_NOTES[taskId] || [])].sort((a, b) => b.date.localeCompare(a.date));
+    }
+
+    const response = await fetch(
+      `${session.baseUrl}/apirest.php/ProjectTask/${taskId}/Notepad?expand_dropdowns=true&range=0-999`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'App-Token': session.appToken,
+          'Session-Token': session.sessionToken
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`No se pudieron cargar las notas de la tarea (${response.status})`);
+    }
+
+    const raw = await response.json();
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((item: any) => this.mapRawNote(item))
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  }
+
+  /** Agrega una nota a una tarea de proyecto. */
+  static async addTaskNote(session: GLPISession, taskId: number, text: string): Promise<GLPINote> {
+    const nowStr = this.toGlpiDateTime(new Date());
+
+    if (session.isMock) {
+      const note: GLPINote = {
+        id: Date.now(),
+        content: text,
+        date: nowStr,
+        user_name: session.username || 'Usuario Demo'
+      };
+      (MOCK_TASK_NOTES[taskId] ||= []).push(note);
+      return note;
+    }
+
+    const response = await fetch(`${session.baseUrl}/apirest.php/Notepad`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'App-Token': session.appToken,
+        'Session-Token': session.sessionToken
+      },
+      body: JSON.stringify({
+        input: {
+          itemtype: 'ProjectTask',
+          items_id: taskId,
+          content: this.plainTextToHtml(text)
+        }
+      })
+    });
+
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const err = await response.json();
+        if (Array.isArray(err) && err[1]) detail = `: ${err[1]}`;
+      } catch { /* respuesta sin JSON */ }
+      throw new Error(`No se pudo guardar la nota en GLPI (${response.status})${detail}`);
+    }
+
+    return {
+      id: Date.now(),
+      content: text,
+      date: nowStr,
+      user_name: [session.firstname, session.realname].filter(Boolean).join(' ') || session.username
+    };
+  }
+
   /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
   private static toGlpiDateTime(date: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -1030,6 +1148,12 @@ const MOCK_PROJECTS: GLPIProject[] = [
     tasks_count: 5
   }
 ];
+
+const MOCK_TASK_NOTES: Record<number, GLPINote[]> = {
+  22: [
+    { id: 1, content: 'Se agendó con el usuario para el sábado 10 a las 9:00.', date: '2026-10-08 17:45:00', user_name: 'Usuario Demo' }
+  ]
+};
 
 const MOCK_PROJECT_TASKS: Record<number, GLPIProjectTask[]> = {
   1: [

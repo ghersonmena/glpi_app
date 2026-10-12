@@ -106,3 +106,11 @@ export interface ProjectTaskNode extends GLPIProjectTask {
   level: number;
   isExpanded?: boolean;
 }
+
+// Nota (Notepad) de GLPI asociada a un elemento: historial de comentarios de una tarea
+export interface GLPINote {
+  id: number;
+  content: string; // texto plano (ya sin HTML)
+  date: string;
+  user_name?: string;
+}

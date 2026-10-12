@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
+import { TaskNotes } from './TaskNotes';
 import { 
   Folder, 
   ChevronRight, 
@@ -11,7 +12,8 @@ import {
   ArrowLeft, 
   RefreshCw, 
   Sparkles,
-  Layers
+  Layers,
+  MessageSquare
 } from 'lucide-react';
 
 const stripAccents = (s: string) =>
@@ -74,6 +76,10 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
 
   // Estado para controlar cuáles nodos del árbol están expandidos (key: task.id)
   const [expandedNodes, setExpandedNodes] = useState<Record<number, boolean>>({});
+
+  // Panel de notas abierto por hito y conteo de notas ya cargadas (key: task.id)
+  const [openNotes, setOpenNotes] = useState<Record<number, boolean>>({});
+  const [noteCounts, setNoteCounts] = useState<Record<number, number>>({});
 
   const fetchTasks = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -398,6 +404,34 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
 
           {/* Lado Derecho: Accionador de 1-CLIC solo para tareas finales sin sub-tareas (nodos hoja) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px' }}>
+            {/* Notas (historial de comentarios en GLPI): solo para hitos */}
+            {!hasChildren && node.is_milestone && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenNotes(prev => ({ ...prev, [node.id]: !prev[node.id] }));
+                }}
+                title={openNotes[node.id] ? 'Ocultar notas' : 'Ver y agregar notas'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 8px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border-color)',
+                  background: openNotes[node.id] ? 'rgba(59, 130, 246, 0.08)' : 'var(--card-bg)',
+                  color: openNotes[node.id] ? 'var(--primary)' : 'var(--text-muted)',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <MessageSquare size={14} />
+                {noteCounts[node.id] !== undefined && <span>{noteCounts[node.id]}</span>}
+              </button>
+            )}
+
             {hasChildren ? (
               <span
                 className="badge"
@@ -449,6 +483,15 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
             )}
           </div>
         </div>
+
+        {!hasChildren && node.is_milestone && openNotes[node.id] && (
+          <TaskNotes
+            session={session}
+            taskId={node.id}
+            indent={indentPadding}
+            onCountChange={(count) => setNoteCounts(prev => ({ ...prev, [node.id]: count }))}
+          />
+        )}
 
         {/* Subnodo del Árbol (Hijos) */}
         {hasChildren && isExpanded && (
