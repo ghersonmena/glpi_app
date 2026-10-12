@@ -61,31 +61,22 @@ export const Settings: React.FC<SettingsProps> = ({ session, onLogout }) => {
         </div>
       </div>
 
-      {/* Datos del Servidor & Variables de Entorno */}
+      {/* Servidor: solo el estado, sin mostrar la URL ni el App-Token */}
       <div className="card">
         <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Server size={18} color="var(--primary)" /> Servidor & Entorno (.env)
+          <Server size={18} color="var(--primary)" /> Servidor GLPI
         </h3>
 
-        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <div>
-            <strong>URL Servidor:</strong>
-            <div style={{ color: 'var(--text-main)', fontFamily: 'monospace', fontSize: '0.8rem', marginTop: '2px', wordBreak: 'break-all' }}>
-              {session.baseUrl}
-            </div>
-          </div>
-
-          <div>
-            <strong>Estado de Variables de Entorno:</strong>
-            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <span className="badge" style={{ background: envUrl ? '#ecfdf5' : '#fef2f2', color: envUrl ? '#059669' : '#dc2626' }}>
-                <CheckCircle2 size={12} /> VITE_GLPI_URL
-              </span>
-              <span className="badge" style={{ background: envAppToken ? '#ecfdf5' : '#fef2f2', color: envAppToken ? '#059669' : '#dc2626' }}>
-                <CheckCircle2 size={12} /> VITE_GLPI_APP_TOKEN
-              </span>
-            </div>
-          </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <span className="badge" style={{ background: '#ecfdf5', color: '#059669' }}>
+            <CheckCircle2 size={12} /> Conectado
+          </span>
+          <span className="badge" style={{ background: envUrl ? '#ecfdf5' : '#fef2f2', color: envUrl ? '#059669' : '#dc2626' }}>
+            <CheckCircle2 size={12} /> URL {envUrl ? 'configurada' : 'manual'}
+          </span>
+          <span className="badge" style={{ background: envAppToken ? '#ecfdf5' : '#fef2f2', color: envAppToken ? '#059669' : '#dc2626' }}>
+            <CheckCircle2 size={12} /> App-Token {envAppToken ? 'configurado' : 'manual'}
+          </span>
         </div>
       </div>
 

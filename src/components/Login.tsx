@@ -9,8 +9,12 @@ interface LoginProps {
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   // Configuración leída por defecto de variables de entorno (.env)
-  const envUrl = import.meta.env.VITE_GLPI_URL || 'http://localhost/glpi';
+  const envUrl = import.meta.env.VITE_GLPI_URL || '';
   const envAppToken = import.meta.env.VITE_GLPI_APP_TOKEN || '';
+  // Si vienen del .env no se muestran ni se piden: solo se indica que están cargados
+  const hasEnvUrl = envUrl.trim() !== '';
+  const hasEnvAppToken = envAppToken.trim() !== '';
+  const serverFromEnv = hasEnvUrl && hasEnvAppToken;
 
   const [authMode, setAuthMode] = useState<'credentials' | 'user_token'>('credentials');
   const [baseUrl, setBaseUrl] = useState<string>(envUrl);
@@ -19,7 +23,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [password, setPassword] = useState<string>('');
   const [userToken, setUserToken] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [showServerConfig, setShowServerConfig] = useState<boolean>(!envAppToken);
+  const [showServerConfig, setShowServerConfig] = useState<boolean>(!serverFromEnv);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -250,72 +254,93 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           )}
         </div>
 
-        {/* Sección desplegable para configurar Servidor y App-Token (.env) */}
-        <div className="card" style={{ padding: '12px 18px' }}>
-          <div 
-            onClick={() => setShowServerConfig(!showServerConfig)}
+        {/* Servidor y App-Token: si vienen del .env solo se confirma que están cargados */}
+        {serverFromEnv ? (
+          <div
+            className="card"
             style={{
+              padding: '12px 18px',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              cursor: 'pointer'
+              gap: '10px',
+              background: 'rgba(16, 185, 129, 0.08)',
+              border: '1px solid rgba(16, 185, 129, 0.35)'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Server size={18} color="var(--primary)" />
-              <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>
-                Configuración del Servidor (.env)
-              </span>
+            <CheckCircle2 size={18} color="#10b981" style={{ flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#059669' }}>Servidor GLPI configurado</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>URL y App-Token cargados desde la configuración</div>
             </div>
-            {showServerConfig ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </div>
-
-          {showServerConfig && (
-            <div className="animate-fade-in" style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px dashed var(--border-color)' }}>
-              <div className="form-group">
-                <label className="form-label">URL del Servidor GLPI</label>
-                <div className="input-wrapper">
-                  <Server className="input-icon" size={18} />
-                  <input
-                    type="url"
-                    className="form-input"
-                    placeholder="https://glpi.midominio.com"
-                    value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    disabled={loading}
-                  />
-                </div>
+        ) : (
+          <div className="card" style={{ padding: '12px 18px' }}>
+            <div
+              onClick={() => setShowServerConfig(!showServerConfig)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Server size={18} color="var(--primary)" />
+                <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>
+                  Configuración del Servidor
+                </span>
               </div>
+              {showServerConfig ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+            </div>
 
-              <div className="form-group" style={{ marginBottom: '8px' }}>
-                <label className="form-label">GLPI App-Token</label>
-                <div className="input-wrapper">
-                  <Key className="input-icon" size={18} />
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Generado en Configuración -> API en GLPI"
-                    value={appToken}
-                    onChange={(e) => setAppToken(e.target.value)}
-                    disabled={loading}
-                  />
-                </div>
-              </div>
-
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', background: 'var(--bg-main)', padding: '8px 12px', borderRadius: '8px', marginTop: '8px' }}>
-                {envAppToken ? (
-                  <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <CheckCircle2 size={12} /> App-Token cargado desde archivo <code>.env</code>
-                  </span>
+            {showServerConfig && (
+              <div className="animate-fade-in" style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px dashed var(--border-color)' }}>
+                {hasEnvUrl ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', fontWeight: 600, color: '#059669', marginBottom: '12px' }}>
+                    <CheckCircle2 size={14} /> URL del servidor cargada
+                  </div>
                 ) : (
-                  <span>
-                    💡 Consejo: Puedes definir <code>VITE_GLPI_URL</code> y <code>VITE_GLPI_APP_TOKEN</code> en tu archivo <code>.env</code>.
-                  </span>
+                  <div className="form-group">
+                    <label className="form-label">URL del Servidor GLPI</label>
+                    <div className="input-wrapper">
+                      <Server className="input-icon" size={18} />
+                      <input
+                        type="url"
+                        className="form-input"
+                        placeholder="https://glpi.midominio.com"
+                        value={baseUrl}
+                        onChange={(e) => setBaseUrl(e.target.value)}
+                        disabled={loading}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {hasEnvAppToken ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', fontWeight: 600, color: '#059669' }}>
+                    <CheckCircle2 size={14} /> App-Token cargado
+                  </div>
+                ) : (
+                  <div className="form-group" style={{ marginBottom: '8px' }}>
+                    <label className="form-label">GLPI App-Token</label>
+                    <div className="input-wrapper">
+                      <Key className="input-icon" size={18} />
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        className="form-input"
+                        placeholder="Generado en Configuración -> API en GLPI"
+                        value={appToken}
+                        onChange={(e) => setAppToken(e.target.value)}
+                        disabled={loading}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         <button
           type="submit"
