@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  glpi-mobile-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_GLPI_URL: ${VITE_GLPI_URL:-http://localhost/glpi}
+        VITE_GLPI_APP_TOKEN: ${VITE_GLPI_APP_TOKEN:-}
+        VITE_ENABLE_MOCK: ${VITE_ENABLE_MOCK:-false}
+    container_name: glpi_mobile_app
+    ports:
+      - "8080:80"
+    env_file:
+      - .env
+    restart: unless-stopped

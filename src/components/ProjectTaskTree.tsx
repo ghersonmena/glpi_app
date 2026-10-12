@@ -1,0 +1,609 @@
+import React, { useState, useEffect } from 'react';
+import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode } from '../types/glpi';
+import { GLPIService } from '../services/glpiService';
+import { 
+  Folder, 
+  ChevronRight, 
+  ChevronDown, 
+  Square, 
+  Flag, 
+  CheckCircle2, 
+  ArrowLeft, 
+  RefreshCw, 
+  Sparkles,
+  Layers
+} from 'lucide-react';
+
+const stripAccents = (s: string) =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+
+// Orden del flujo de mantenimiento. Se busca por palabra clave para tolerar
+// variaciones en el nombre ("MANTENIMIENTO EVIDENCIAS" / "SUBIDA DE EVIDENCIAS").
+const MAINTENANCE_STEPS: RegExp[] = [
+  /PROGRAMACION/,
+  /AVISO/,
+  /INICIAD/,
+  /TERMINAD|FINALIZAD/,
+  /EVIDENCIA/,
+  /RESPONSIVA.*CREAD/,
+  /RESPONSIVA.*FIRMAD/
+];
+
+// Solo aplica a tareas hoja, para no confundir grupos como "MANTENIMIENTO PROGRAMADOS PARA ..."
+const getStepRank = (node: ProjectTaskNode): number | null => {
+  if (node.children.length > 0) return null;
+  const name = stripAccents(node.name);
+  const idx = MAINTENANCE_STEPS.findIndex(re => re.test(name));
+  return idx === -1 ? null : idx;
+};
+
+const MONTHS: Record<string, number> = {
+  ENERO: 0, FEBRERO: 1, MARZO: 2, ABRIL: 3, MAYO: 4, JUNIO: 5, JULIO: 6,
+  AGOSTO: 7, SEPTIEMBRE: 8, SETIEMBRE: 8, OCTUBRE: 9, NOVIEMBRE: 10, DICIEMBRE: 11
+};
+
+// Extrae fechas escritas en el nombre: "5 DE SEPTIEMBRE DEL 2026", "10 DE OCTUBRE 2026"
+const parseDateFromName = (name: string): number | null => {
+  const m = stripAccents(name).match(/(\d{1,2})\s+DE\s+([A-Z]+)(?:\s+(?:DEL?\s+)?(\d{4}))?/);
+  if (!m || MONTHS[m[2]] === undefined) return null;
+  const year = m[3] ? Number(m[3]) : new Date().getFullYear();
+  return new Date(year, MONTHS[m[2]], Number(m[1])).getTime();
+};
+
+const parseGlpiDate = (value?: string): number | null => {
+  if (!value) return null;
+  const t = new Date(value.replace(' ', 'T')).getTime();
+  return isNaN(t) ? null : t;
+};
+
+const getSortDate = (node: ProjectTaskNode): number | null =>
+  parseDateFromName(node.name) ?? parseGlpiDate(node.plan_start_date);
+
+interface ProjectTaskTreeProps {
+  session: GLPISession;
+  project: GLPIProject;
+  onBack: () => void;
+}
+
+export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, project, onBack }) => {
+  const [flatTasks, setFlatTasks] = useState<GLPIProjectTask[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [updatingTaskId, setUpdatingTaskId] = useState<number | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Estado para controlar cuáles nodos del árbol están expandidos (key: task.id)
+  const [expandedNodes, setExpandedNodes] = useState<Record<number, boolean>>({});
+
+  const fetchTasks = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+
+    try {
+      const data = await GLPIService.getProjectTasks(session, project.id);
+      console.log(`[ProjectTaskTree] Proyecto "${project.name}" (ID: ${project.id}) → ${data.length} tareas cargadas`);
+      if (data.length > 0) {
+        console.log('[ProjectTaskTree] Ejemplo tarea[0]:', JSON.stringify(data[0]));
+        const roots = data.filter(t => !t.projecttasks_id || t.projecttasks_id === 0);
+        console.log(`[ProjectTaskTree] Tareas raíz (sin padre): ${roots.length}`, roots.map(t => `#${t.id} "${t.name}" pid=${t.projecttasks_id} parent_name_ref="${t.parent_name_ref || ''}"`));
+      }
+      setFlatTasks(data);
+
+      // La vista inicial debe mostrar los grupos del proyecto (por ejemplo, cada
+      // jornada programada), no todas las actividades individuales de golpe.
+      // El usuario puede abrir el grupo que necesite consultar.
+      const initialExpanded: Record<number, boolean> = {};
+      data.forEach(t => {
+        initialExpanded[t.id] = false;
+      });
+      setExpandedNodes(initialExpanded);
+    } catch (err) {
+      console.warn('Error al cargar las tareas del proyecto:', err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+
+
+  useEffect(() => {
+    fetchTasks();
+  }, [project.id]);
+
+  // Construir el árbol de jerarquía (WBS) dinámicamente a partir de la lista plana
+  const buildTree = (tasks: GLPIProjectTask[]): ProjectTaskNode[] => {
+    const taskMap: Record<number, ProjectTaskNode> = {};
+    const nameMap: Record<string, ProjectTaskNode> = {};
+    const rootNodes: ProjectTaskNode[] = [];
+    const assignedAsChild = new Set<number>();
+
+    const normalize = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+
+    // PASO 1: Crear nodos y mapas (por ID y por nombre)
+    tasks.forEach(task => {
+      const node: ProjectTaskNode = { ...task, children: [], level: 0 };
+      taskMap[task.id] = node;
+      if (task.name?.trim()) {
+        nameMap[normalize(task.name)] = node;
+      }
+    });
+
+    // PASO 2: Vincular cada nodo a su padre
+    tasks.forEach(task => {
+      const node = taskMap[task.id];
+      let parentNode: ProjectTaskNode | undefined;
+
+      // A) Por ID numérico (sin expand_dropdowns — caso normal)
+      if (task.projecttasks_id && task.projecttasks_id > 0 && taskMap[task.projecttasks_id]) {
+        parentNode = taskMap[task.projecttasks_id];
+      }
+
+      // B) Por nombre del padre — fallback si projecttasks_id llegó como nombre (con expand_dropdowns)
+      if (!parentNode && task.parent_name_ref?.trim()) {
+        const refNorm = normalize(task.parent_name_ref);
+        parentNode = nameMap[refNorm];
+        if (!parentNode) {
+          const stripped = refNorm.replace(/^\d+(\.\d+)*\s*[-_.:]?\s*/, '');
+          if (stripped) parentNode = nameMap[stripped];
+        }
+      }
+
+      // Evitar auto-referencia y duplicados
+      if (parentNode && parentNode.id !== node.id) {
+        if (!parentNode.children.find(c => c.id === node.id)) {
+          parentNode.children.push(node);
+          assignedAsChild.add(task.id);
+        }
+      }
+    });
+
+    // PASO 3: Los nodos sin padre asignado son raíces
+    tasks.forEach(task => {
+      if (!assignedAsChild.has(task.id)) {
+        rootNodes.push(taskMap[task.id]);
+      }
+    });
+
+    const sortNodes = (nodes: ProjectTaskNode[]) => {
+      // GLPI no garantiza el orden de las tareas devueltas por la API:
+      // 1) Los pasos del flujo de mantenimiento van en su orden de proceso.
+      // 2) Los grupos se ordenan por la fecha del nombre ("5 DE SEPTIEMBRE DEL 2026")
+      //    o, si no la tiene, por la fecha planificada de inicio.
+      // 3) En empate, por ID (orden de creación en GLPI).
+      nodes.sort((a, b) => {
+        const aStep = getStepRank(a);
+        const bStep = getStepRank(b);
+        if (aStep !== null && bStep !== null && aStep !== bStep) return aStep - bStep;
+
+        const aDate = getSortDate(a);
+        const bDate = getSortDate(b);
+        if (aDate !== null && bDate !== null && aDate !== bDate) return aDate - bDate;
+        if (aDate !== null && bDate === null) return -1;
+        if (aDate === null && bDate !== null) return 1;
+
+        return a.id - b.id;
+      });
+      nodes.forEach(node => sortNodes(node.children));
+    };
+
+    // PASO 4: Si la única raíz es la "tarea paraguas" del proyecto, promover sus hijos
+    const calcLevels = (node: ProjectTaskNode, level: number): number => {
+      node.level = level;
+      if (node.children.length > 0) {
+        const total = node.children.reduce((acc, child) => acc + calcLevels(child, level + 1), 0);
+        // floor: un grupo solo marca 100% cuando todas sus sub-tareas están concluidas
+        node.percent_done = Math.floor(total / node.children.length);
+        if (node.percent_done === 100) { node.state = 3; node.state_name = 'Concluida'; }
+      }
+      return node.percent_done;
+    };
+
+    if (
+      rootNodes.length === 1 &&
+      rootNodes[0].children.length > 0 &&
+      normalize(rootNodes[0].name) === normalize(project.name)
+    ) {
+      const promoted = rootNodes[0].children;
+      promoted.forEach(r => calcLevels(r, 0));
+      sortNodes(promoted);
+      return promoted;
+    }
+
+    // PASO 5: Múltiples raíces — calcular niveles normalmente
+    rootNodes.forEach(r => calcLevels(r, 0));
+    sortNodes(rootNodes);
+    return rootNodes;
+  };
+
+
+
+
+  const treeNodes = buildTree(flatTasks);
+
+  // Porcentaje global = promedio de los grupos principales (cada jornada pesa igual)
+  const calculateOverallProjectPercent = (): number => {
+    if (treeNodes.length === 0) return project.percent_done;
+    const sum = treeNodes.reduce((acc, node) => acc + node.percent_done, 0);
+    return Math.floor(sum / treeNodes.length);
+  };
+
+  const overallPercent = calculateOverallProjectPercent();
+
+  const toggleExpand = (nodeId: number) => {
+    setExpandedNodes(prev => ({
+      ...prev,
+      [nodeId]: !prev[nodeId]
+    }));
+  };
+
+  const handleExpandAll = () => {
+    const next: Record<number, boolean> = {};
+    flatTasks.forEach(t => { next[t.id] = true; });
+    setExpandedNodes(next);
+  };
+
+  const handleCollapseAll = () => {
+    // Un objeto vacío expandía todo (los nodos sin clave se consideran abiertos)
+    const next: Record<number, boolean> = {};
+    flatTasks.forEach(t => { next[t.id] = false; });
+    setExpandedNodes(next);
+  };
+
+  // Acción de 1-Clic para Concluir Hito / Tarea
+  const handleToggleComplete = async (node: ProjectTaskNode, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // Si ya está al 100%, opcionalmente no hacer nada o notificar
+    if (node.percent_done === 100) {
+      setToastMsg(`El hito "${node.name}" ya se encuentra 100% concluido.`);
+      setTimeout(() => setToastMsg(null), 3000);
+      return;
+    }
+
+    setUpdatingTaskId(node.id);
+
+    try {
+      await GLPIService.completeTaskMilestone(session, node.id, project.id);
+
+      // Actualizar estado plano local
+      setFlatTasks(prev => prev.map(t => {
+        if (t.id === node.id) {
+          return {
+            ...t,
+            percent_done: 100,
+            state: 3,
+            real_end_date: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            state_name: 'Concluida'
+          };
+        }
+        return t;
+      }));
+
+      setToastMsg(`¡Hito "${node.name}" marcado al 100% y cerrado en GLPI!`);
+      setTimeout(() => setToastMsg(null), 3500);
+    } catch (err: any) {
+      console.error('Error al completar hito:', err);
+      setToastMsg('No se pudo actualizar el hito en GLPI.');
+      setTimeout(() => setToastMsg(null), 3000);
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
+
+  // Componente recursivo para renderizar cada nodo de la jerarquía
+  const renderTreeNode = (node: ProjectTaskNode) => {
+    const hasChildren = node.children.length > 0;
+    const isExpanded = expandedNodes[node.id] !== false; // por defecto expandido si no es false
+    const isCompleted = node.percent_done === 100;
+    const isUpdating = updatingTaskId === node.id;
+
+    const indentPadding = node.level * 16;
+
+    return (
+      <div key={node.id} style={{ marginBottom: '6px' }}>
+        <div
+          onClick={() => hasChildren && toggleExpand(node.id)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 12px',
+            paddingLeft: `${12 + indentPadding}px`,
+            background: hasChildren ? 'var(--card-bg)' : 'var(--bg-main)',
+            border: `1.5px solid ${isCompleted ? '#d1fae5' : 'var(--border-color)'}`,
+            borderRadius: 'var(--radius-md)',
+            cursor: hasChildren ? 'pointer' : 'default',
+            boxShadow: hasChildren ? 'var(--shadow-sm)' : 'none',
+            transition: 'all 0.2s ease',
+            position: 'relative'
+          }}
+        >
+          {/* Lado Izquierdo: Icono expandir + Título + Badges */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, overflow: 'hidden' }}>
+            {hasChildren ? (
+              <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
+                {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+              </span>
+            ) : (
+              <span style={{ width: '18px' }} />
+            )}
+
+            {/* Icono diferenciador de tipo de nodo */}
+            {hasChildren ? (
+              <Folder size={18} color="var(--primary)" />
+            ) : node.is_milestone ? (
+              <Flag size={16} color={isCompleted ? '#10b981' : '#f59e0b'} fill={isCompleted ? '#10b981' : 'transparent'} />
+            ) : (
+              <Layers size={16} color="var(--text-muted)" />
+            )}
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span 
+                  style={{ 
+                    fontSize: '0.85rem', 
+                    fontWeight: hasChildren ? 800 : 600, 
+                    color: isCompleted ? '#059669' : 'var(--text-main)',
+                    textDecoration: isCompleted && !hasChildren ? 'line-through' : 'none'
+                  }}
+                >
+                  {node.name}
+                </span>
+
+                {node.is_milestone && (
+                  <span 
+                    className="badge"
+                    style={{ 
+                      fontSize: '0.65rem', 
+                      padding: '2px 6px',
+                      background: isCompleted ? '#ecfdf5' : '#fffbe6', 
+                      color: isCompleted ? '#047857' : '#d97706',
+                      border: `1px solid ${isCompleted ? '#a7f3d0' : '#fef08a'}`
+                    }}
+                  >
+                    🚩 HITO
+                  </span>
+                )}
+              </div>
+
+              {/* Barra de progreso de la tarea */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                <div 
+                  style={{ 
+                    flex: 1, 
+                    maxWidth: '120px', 
+                    height: '5px', 
+                    background: 'var(--border-color)', 
+                    borderRadius: '4px', 
+                    overflow: 'hidden' 
+                  }}
+                >
+                  <div 
+                    style={{ 
+                      width: `${node.percent_done}%`, 
+                      height: '100%', 
+                      background: isCompleted ? '#10b981' : 'var(--primary-gradient)',
+                      transition: 'width 0.3s ease'
+                    }} 
+                  />
+                </div>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: isCompleted ? '#10b981' : 'var(--text-muted)' }}>
+                  {node.percent_done}% {hasChildren && `(${node.children.length} sub-tareas)`}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Lado Derecho: Accionador de 1-CLIC solo para tareas finales sin sub-tareas (nodos hoja) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px' }}>
+            {hasChildren ? (
+              <span
+                className="badge"
+                style={{
+                  background: isCompleted ? '#ecfdf5' : '#eff6ff',
+                  color: isCompleted ? '#059669' : '#2563eb',
+                  fontSize: '0.75rem',
+                  fontWeight: 700
+                }}
+              >
+                {isCompleted ? '✓ 100% Concluido' : `${node.percent_done}% (${node.children.length} sub-tareas)`}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={(e) => handleToggleComplete(node, e)}
+                disabled={isUpdating}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 10px',
+                  borderRadius: '10px',
+                  border: isCompleted ? '1px solid #a7f3d0' : '1px solid var(--primary)',
+                  background: isCompleted ? '#ecfdf5' : 'rgba(59, 130, 246, 0.08)',
+                  color: isCompleted ? '#059669' : 'var(--primary)',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: isCompleted ? 'default' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  boxShadow: isCompleted ? 'none' : 'var(--shadow-sm)'
+                }}
+                title={isCompleted ? 'Tarea completada (100%)' : 'Concluir hito con 1-clic (100%, cerrado)'}
+              >
+                {isUpdating ? (
+                  <RefreshCw size={14} className="spin" />
+                ) : isCompleted ? (
+                  <>
+                    <CheckCircle2 size={14} color="#10b981" />
+                    <span>100% Concluido</span>
+                  </>
+                ) : (
+                  <>
+                    <Square size={14} />
+                    <span>{node.is_milestone ? 'Concluir Hito' : 'Concluir Tarea'}</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Subnodo del Árbol (Hijos) */}
+        {hasChildren && isExpanded && (
+          <div style={{ marginTop: '4px' }}>
+            {node.children.map(child => renderTreeNode(child))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="animate-fade-in" style={{ paddingBottom: '20px' }}>
+      {/* Encabezado con navegación de regreso */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'none',
+            border: 'none',
+            color: 'var(--primary)',
+            fontWeight: 700,
+            fontSize: '0.85rem',
+            cursor: 'pointer'
+          }}
+        >
+          <ArrowLeft size={18} /> Ver todos los proyectos
+        </button>
+
+        <button
+          onClick={() => fetchTasks(true)}
+          disabled={refreshing}
+          style={{
+            background: 'var(--card-bg)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+            padding: '6px 12px',
+            color: 'var(--text-main)',
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> Actualizar
+        </button>
+      </div>
+
+      {/* Tarjeta Informativa del Proyecto */}
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>
+            Código: {project.code || `PRJ-${project.id}`}
+          </span>
+          <span 
+            className="badge" 
+            style={{ 
+              background: overallPercent === 100 ? '#ecfdf5' : '#fffbe6', 
+              color: overallPercent === 100 ? '#047857' : '#b45309' 
+            }}
+          >
+            Avance Automático: {overallPercent}%
+          </span>
+        </div>
+
+        <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', lineHeight: 1.3 }}>
+          {project.name}
+        </h3>
+
+        {/* Barra de progreso global del Proyecto */}
+        <div style={{ marginTop: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 700, marginBottom: '4px' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Progreso Total Acumulado</span>
+            <span style={{ color: 'var(--primary)' }}>{overallPercent}%</span>
+          </div>
+          <div style={{ width: '100%', height: '8px', background: 'var(--bg-main)', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+            <div 
+              style={{ 
+                width: `${overallPercent}%`, 
+                height: '100%', 
+                background: overallPercent === 100 ? '#10b981' : 'var(--primary-gradient)',
+                transition: 'width 0.4s ease'
+              }} 
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Notificación Toast Toast flotante */}
+      {toastMsg && (
+        <div className="alert-box alert-info animate-fade-in" style={{ boxShadow: 'var(--shadow-lg)' }}>
+          <Sparkles size={18} color="#2563eb" />
+          <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{toastMsg}</div>
+        </div>
+      )}
+
+      {/* Barra de Controles para Expandir/Colapsar todo */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '0 4px' }}>
+        <h4 style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-main)' }}>
+          Programación de tareas ({treeNodes.length} grupos)
+        </h4>
+
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={handleExpandAll}
+            style={{
+              padding: '4px 8px',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              background: 'var(--card-bg)',
+              color: 'var(--text-muted)',
+              cursor: 'pointer'
+            }}
+          >
+            Expandir
+          </button>
+          <button
+            onClick={handleCollapseAll}
+            style={{
+              padding: '4px 8px',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              background: 'var(--card-bg)',
+              color: 'var(--text-muted)',
+              cursor: 'pointer'
+            }}
+          >
+            Colapsar
+          </button>
+        </div>
+      </div>
+
+      {/* Renderizado de la Jerarquía de Tareas en Árbol */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+          <RefreshCw className="spin" size={24} style={{ marginBottom: '8px' }} />
+          <div style={{ fontSize: '0.85rem' }}>Construyendo jerarquía de tareas del proyecto...</div>
+        </div>
+      ) : treeNodes.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+          No hay tareas registradas para este proyecto.
+        </div>
+      ) : (
+        <div>
+          {treeNodes.map(node => renderTreeNode(node))}
+        </div>
+      )}
+    </div>
+  );
+};
