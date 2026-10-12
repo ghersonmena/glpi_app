@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode } from '../types/glpi';
+import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode, TaskParticipant } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
 import { TaskNotes } from './TaskNotes';
 import { TaskPhotos } from './TaskPhotos';
+import { AssignParticipants } from './AssignParticipants';
 import { 
   Folder, 
   ChevronRight, 
@@ -15,7 +16,10 @@ import {
   Sparkles,
   Layers,
   MessageSquare,
-  Camera
+  Camera,
+  User as UserIcon,
+  Users as UsersIcon,
+  UserPlus
 } from 'lucide-react';
 
 const stripAccents = (s: string) =>
@@ -85,6 +89,12 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
   // Panel de fotos abierto por equipo y conteo de fotos ya cargadas (key: task.id)
   const [openPhotos, setOpenPhotos] = useState<Record<number, boolean>>({});
   const [photoCounts, setPhotoCounts] = useState<Record<number, number>>({});
+  // Participantes (pestaña "Equipo" de la tarea en GLPI) por tarea (key: task.id)
+  const [participants, setParticipants] = useState<Record<number, TaskParticipant[]>>({});
+  // Hasta que lleguen, no mostrar "Asignar responsable" en tareas que sí tienen responsables
+  const [participantsLoaded, setParticipantsLoaded] = useState<boolean>(false);
+  // Tarea cuyo selector de responsables está abierto
+  const [assigningNode, setAssigningNode] = useState<ProjectTaskNode | null>(null);
 
   const fetchTasks = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -99,6 +109,13 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
         console.log(`[ProjectTaskTree] Tareas raíz (sin padre): ${roots.length}`, roots.map(t => `#${t.id} "${t.name}" pid=${t.projecttasks_id} parent_name_ref="${t.parent_name_ref || ''}"`));
       }
       setFlatTasks(data);
+
+      // Los nombres de los participantes llegan después, sin retrasar el árbol
+      setParticipantsLoaded(false);
+      GLPIService.getTaskParticipants(session, data.map(t => t.id))
+        .then(setParticipants)
+        .catch(err => console.warn('No se pudieron cargar los participantes de las tareas:', err))
+        .finally(() => setParticipantsLoaded(true));
 
       // La vista inicial debe mostrar los grupos del proyecto (por ejemplo, cada
       // jornada programada), no todas las actividades individuales de golpe.
@@ -380,6 +397,46 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
                   </span>
                 )}
               </div>
+
+              {/* Responsables (participantes en GLPI): tocar para asignar o quitar */}
+              {participantsLoaded && <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAssigningNode(node);
+                }}
+                title="Asignar responsables"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  marginTop: '3px',
+                  padding: 0,
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  color: participants[node.id]?.length ? 'var(--text-muted)' : 'var(--primary)',
+                  opacity: participants[node.id]?.length ? 1 : 0.75,
+                  cursor: 'pointer'
+                }}
+              >
+                {participants[node.id]?.length ? (
+                  <>
+                    {participants[node.id].some(p => p.itemtype !== 'User')
+                      ? <UsersIcon size={12} style={{ flexShrink: 0 }} />
+                      : <UserIcon size={12} style={{ flexShrink: 0 }} />}
+                    <span>{participants[node.id].map(p => p.name).join(', ')}</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus size={12} style={{ flexShrink: 0 }} />
+                    <span>Asignar responsable</span>
+                  </>
+                )}
+              </button>}
 
               {/* Barra de progreso de la tarea */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
@@ -677,6 +734,17 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
           </button>
         </div>
       </div>
+
+      {assigningNode && (
+        <AssignParticipants
+          session={session}
+          taskId={assigningNode.id}
+          taskName={assigningNode.name}
+          participants={participants[assigningNode.id] || []}
+          onChange={(list) => setParticipants(prev => ({ ...prev, [assigningNode.id]: list }))}
+          onClose={() => setAssigningNode(null)}
+        />
+      )}
 
       {/* Renderizado de la Jerarquía de Tareas en Árbol */}
       {loading ? (

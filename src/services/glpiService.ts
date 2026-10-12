@@ -1,4 +1,4 @@
-import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote, GLPITaskPhoto, PhotoCategory } from '../types/glpi';
+import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote, GLPITaskPhoto, PhotoCategory, TaskParticipant, GLPIUserOption } from '../types/glpi';
 
 // Status labels & helper functions
 export const GLPI_STATUS_MAP: Record<number, { label: string; color: string; bg: string }> = {
@@ -1163,6 +1163,142 @@ export class GLPIService {
     return { id: documentId, name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
   }
 
+  /**
+   * Participantes (pestaña "Equipo" de cada tarea) de un conjunto de tareas, ya con nombre.
+   * Se descarga toda la tabla ProjectTaskTeam de una vez (pocas peticiones) en lugar de
+   * pedirla tarea por tarea, y luego se resuelve el nombre de cada usuario/grupo una sola vez.
+   */
+  static async getTaskParticipants(session: GLPISession, taskIds: number[]): Promise<Record<number, TaskParticipant[]>> {
+    const wanted = new Set(taskIds);
+
+    if (session.isMock) {
+      const result: Record<number, TaskParticipant[]> = {};
+      Object.entries(MOCK_TASK_PARTICIPANTS).forEach(([taskId, list]) => {
+        if (wanted.has(Number(taskId))) result[Number(taskId)] = [...list];
+      });
+      return result;
+    }
+
+    const rows = (await this.fetchAllPages(session, 'ProjectTaskTeam'))
+      .filter((row: any) => wanted.has(Number(row.projecttasks_id)));
+
+    // Resolver nombres: una petición por participante distinto (normalmente pocos)
+    const headers = {
+      'Content-Type': 'application/json',
+      'App-Token': session.appToken,
+      'Session-Token': session.sessionToken
+    };
+    const nameCache = new Map<string, Promise<string>>();
+    const resolveName = (itemtype: string, id: number): Promise<string> => {
+      const key = `${itemtype}#${id}`;
+      if (!nameCache.has(key)) {
+        nameCache.set(key, (async () => {
+          try {
+            const res = await fetch(`${session.baseUrl}/apirest.php/${itemtype}/${id}`, { headers });
+            if (!res.ok) return `${itemtype} #${id}`;
+            const item = await res.json();
+            // Usuarios: nombre de pila + apellidos; si no están capturados, el login
+            if (itemtype === 'User') return this.userDisplayName(item);
+            return item.completename || item.name || `${itemtype} #${id}`;
+          } catch {
+            return `${itemtype} #${id}`;
+          }
+        })());
+      }
+      return nameCache.get(key)!;
+    };
+
+    const resolved = await Promise.all(rows.map(async (row: any) => ({
+      taskId: Number(row.projecttasks_id),
+      participant: {
+        itemtype: String(row.itemtype),
+        id: Number(row.items_id),
+        name: await resolveName(String(row.itemtype), Number(row.items_id)),
+        rowId: Number(row.id)
+      }
+    })));
+
+    const result: Record<number, TaskParticipant[]> = {};
+    resolved.forEach(({ taskId, participant }) => {
+      (result[taskId] ||= []).push(participant);
+    });
+    return result;
+  }
+
+  private static userDisplayName(item: any): string {
+    const fullName = [item.firstname, item.realname].filter(Boolean).join(' ').trim();
+    return fullName || item.name || `Usuario #${item.id}`;
+  }
+
+  private static activeUsersCache = new Map<string, Promise<GLPIUserOption[]>>();
+
+  /** Usuarios activos de GLPI, ordenados por nombre (se cachea durante la sesión). */
+  static getActiveUsers(session: GLPISession): Promise<GLPIUserOption[]> {
+    if (session.isMock) return Promise.resolve(MOCK_USERS);
+
+    const key = session.sessionToken;
+    if (!this.activeUsersCache.has(key)) {
+      const promise = this.fetchAllPages(session, 'User').then(rows =>
+        rows
+          .filter((u: any) => Number(u.is_active) === 1 && !Number(u.is_deleted))
+          .map((u: any) => ({ id: Number(u.id), name: this.userDisplayName(u), login: String(u.name || '') }))
+          .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+      );
+      // Si falla, no dejar el error en caché: el siguiente intento vuelve a pedirlos
+      promise.catch(() => this.activeUsersCache.delete(key));
+      this.activeUsersCache.set(key, promise);
+    }
+    return this.activeUsersCache.get(key)!;
+  }
+
+  /** Asigna un usuario como participante (pestaña "Equipo") de la tarea. */
+  static async addTaskParticipant(session: GLPISession, taskId: number, user: GLPIUserOption): Promise<TaskParticipant> {
+    if (session.isMock) {
+      const participant = { itemtype: 'User', id: user.id, name: user.name, rowId: Date.now() };
+      (MOCK_TASK_PARTICIPANTS[taskId] ||= []).push(participant);
+      return participant;
+    }
+
+    const res = await fetch(`${session.baseUrl}/apirest.php/ProjectTaskTeam`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'App-Token': session.appToken,
+        'Session-Token': session.sessionToken
+      },
+      body: JSON.stringify({ input: { projecttasks_id: taskId, itemtype: 'User', items_id: user.id } })
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const err = await res.json();
+        if (Array.isArray(err) && err[1]) detail = `: ${err[1]}`;
+      } catch { /* respuesta sin JSON */ }
+      throw new Error(`No se pudo asignar a ${user.name} (${res.status})${detail}`);
+    }
+    const created = await res.json();
+    return { itemtype: 'User', id: user.id, name: user.name, rowId: Number(created?.id) || undefined };
+  }
+
+  /** Quita un participante de la tarea (borra su registro ProjectTaskTeam). */
+  static async removeTaskParticipant(session: GLPISession, taskId: number, participant: TaskParticipant): Promise<void> {
+    if (session.isMock) {
+      MOCK_TASK_PARTICIPANTS[taskId] = (MOCK_TASK_PARTICIPANTS[taskId] || []).filter(p => p.rowId !== participant.rowId);
+      return;
+    }
+    if (!participant.rowId) throw new Error(`No se encontró el registro de ${participant.name} en GLPI`);
+
+    const res = await fetch(`${session.baseUrl}/apirest.php/ProjectTaskTeam/${participant.rowId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'App-Token': session.appToken,
+        'Session-Token': session.sessionToken
+      }
+    });
+    if (!res.ok) throw new Error(`No se pudo quitar a ${participant.name} (${res.status})`);
+  }
+
   /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
   private static toGlpiDateTime(date: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -1313,6 +1449,22 @@ const MOCK_PROJECTS: GLPIProject[] = [
 ];
 
 const MOCK_TASK_PHOTOS: Record<number, GLPITaskPhoto[]> = {};
+
+const MOCK_USERS: GLPIUserOption[] = [
+  { id: 3, name: 'Ana López', login: 'alopez' },
+  { id: 4, name: 'Carlos Ruiz', login: 'cruiz' },
+  { id: 2, name: 'Juan Pérez', login: 'jperez' }
+];
+
+const MOCK_TASK_PARTICIPANTS: Record<number, TaskParticipant[]> = {
+  21: [{ itemtype: 'User', id: 2, name: 'Juan Pérez', rowId: 1 }],
+  24: [{ itemtype: 'User', id: 2, name: 'Juan Pérez', rowId: 2 }],
+  25: [
+    { itemtype: 'User', id: 2, name: 'Juan Pérez', rowId: 3 },
+    { itemtype: 'User', id: 3, name: 'Ana López', rowId: 4 }
+  ],
+  27: [{ itemtype: 'Group', id: 1, name: 'Soporte Técnico', rowId: 5 }]
+};
 
 const MOCK_TASK_NOTES: Record<number, GLPINote[]> = {
   22: [

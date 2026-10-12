@@ -130,3 +130,18 @@ export interface PhotoCategory {
   id: number; // documentcategories_id
   label: string;
 }
+
+// Participante (ProjectTaskTeam) de una tarea de proyecto, ya con su nombre resuelto
+export interface TaskParticipant {
+  itemtype: string; // User, Group, Supplier o Contact
+  id: number;
+  name: string;
+  rowId?: number; // id del registro ProjectTaskTeam (para poder quitarlo)
+}
+
+// Usuario de GLPI que se puede asignar como responsable
+export interface GLPIUserOption {
+  id: number;
+  name: string; // "Nombre Apellido" o login
+  login: string;
+}
