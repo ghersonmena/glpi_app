@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
 import { TaskNotes } from './TaskNotes';
+import { TaskPhotos } from './TaskPhotos';
 import { 
   Folder, 
   ChevronRight, 
@@ -13,7 +14,8 @@ import {
   RefreshCw, 
   Sparkles,
   Layers,
-  MessageSquare
+  MessageSquare,
+  Camera
 } from 'lucide-react';
 
 const stripAccents = (s: string) =>
@@ -80,6 +82,9 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
   // Panel de notas abierto por hito y conteo de notas ya cargadas (key: task.id)
   const [openNotes, setOpenNotes] = useState<Record<number, boolean>>({});
   const [noteCounts, setNoteCounts] = useState<Record<number, number>>({});
+  // Panel de fotos abierto por equipo y conteo de fotos ya cargadas (key: task.id)
+  const [openPhotos, setOpenPhotos] = useState<Record<number, boolean>>({});
+  const [photoCounts, setPhotoCounts] = useState<Record<number, number>>({});
 
   const fetchTasks = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -304,6 +309,8 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
     const isExpanded = expandedNodes[node.id] !== false; // por defecto expandido si no es false
     const isCompleted = node.percent_done === 100;
     const isUpdating = updatingTaskId === node.id;
+    // "Equipo" = tarea cuyos hijos son hitos (p. ej. MANTENIMIENTO DE EQUIPO DE X): ahí van las fotos
+    const isEquipment = hasChildren && node.children.some(child => child.is_milestone);
 
     const indentPadding = node.level * 16;
 
@@ -404,6 +411,34 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
 
           {/* Lado Derecho: Accionador de 1-CLIC solo para tareas finales sin sub-tareas (nodos hoja) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px' }}>
+            {/* Fotos del mantenimiento: solo en la tarea del equipo */}
+            {isEquipment && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenPhotos(prev => ({ ...prev, [node.id]: !prev[node.id] }));
+                }}
+                title={openPhotos[node.id] ? 'Ocultar fotos' : 'Ver y tomar fotos del mantenimiento'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 8px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--border-color)',
+                  background: openPhotos[node.id] ? 'rgba(59, 130, 246, 0.08)' : 'var(--card-bg)',
+                  color: openPhotos[node.id] ? 'var(--primary)' : 'var(--text-muted)',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <Camera size={14} />
+                {photoCounts[node.id] !== undefined && <span>{photoCounts[node.id]}</span>}
+              </button>
+            )}
+
             {/* Notas (historial de comentarios en GLPI): solo para hitos */}
             {!hasChildren && node.is_milestone && (
               <button
@@ -483,6 +518,16 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
             )}
           </div>
         </div>
+
+        {isEquipment && openPhotos[node.id] && (
+          <TaskPhotos
+            session={session}
+            taskId={node.id}
+            taskName={node.name}
+            indent={indentPadding}
+            onCountChange={(count) => setPhotoCounts(prev => ({ ...prev, [node.id]: count }))}
+          />
+        )}
 
         {!hasChildren && node.is_milestone && openNotes[node.id] && (
           <TaskNotes

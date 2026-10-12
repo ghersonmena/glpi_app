@@ -1,4 +1,4 @@
-import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote } from '../types/glpi';
+import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote, GLPITaskPhoto, PhotoCategory } from '../types/glpi';
 
 // Status labels & helper functions
 export const GLPI_STATUS_MAP: Record<number, { label: string; color: string; bg: string }> = {
@@ -101,6 +101,17 @@ const MOCK_FOLLOWUPS: Record<number, GLPIFollowup[]> = {
     }
   ]
 };
+
+/**
+ * Rubros de documento (Configuración → Desplegables → Rubros de documentos) con los que se
+ * clasifican las fotos de evidencia de mantenimiento:
+ *   10 = PREVIO MANTENIMIENTO  (front/documentcategory.form.php?id=10)
+ *   11 = POST MANTENIMIENTO    (front/documentcategory.form.php?id=11)
+ */
+export const PHOTO_CATEGORIES: PhotoCategory[] = [
+  { id: 10, label: 'Previo mantenimiento' },
+  { id: 11, label: 'Post mantenimiento' }
+];
 
 export class GLPIService {
   private static cleanUrl(url: string): string {
@@ -1000,6 +1011,158 @@ export class GLPIService {
     };
   }
 
+  /**
+   * Reduce una foto de la cámara (4-10 MB) a JPEG de máx. 1600 px por lado (~300-600 KB).
+   * GLPI suele limitar las subidas a 2 MB (upload_max_filesize de PHP) y en el sitio la
+   * señal móvil puede ser mala. createImageBitmap respeta la orientación EXIF del teléfono.
+   */
+  static async compressPhoto(file: Blob, maxSide = 1600, quality = 0.8): Promise<Blob> {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('El navegador no permite procesar la imagen');
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        blob => (blob ? resolve(blob) : reject(new Error('No se pudo comprimir la imagen'))),
+        'image/jpeg',
+        quality
+      );
+    });
+  }
+
+  /** Fotos (Documents de imagen) ligadas a una tarea, de la más reciente a la más antigua. */
+  static async getTaskPhotos(session: GLPISession, taskId: number): Promise<GLPITaskPhoto[]> {
+    if (session.isMock) {
+      return [...(MOCK_TASK_PHOTOS[taskId] || [])].sort((a, b) => b.date.localeCompare(a.date));
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'App-Token': session.appToken,
+      'Session-Token': session.sessionToken
+    };
+
+    const linksRes = await fetch(
+      `${session.baseUrl}/apirest.php/ProjectTask/${taskId}/Document_Item?range=0-999`,
+      { headers }
+    );
+    if (!linksRes.ok) {
+      throw new Error(`No se pudieron cargar las fotos de la tarea (${linksRes.status})`);
+    }
+    const links = await linksRes.json();
+    if (!Array.isArray(links) || links.length === 0) return [];
+
+    const documentIds = [...new Set(links.map((l: any) => Number(l.documents_id)).filter(Boolean))];
+    const documents = await Promise.all(documentIds.map(async id => {
+      const res = await fetch(`${session.baseUrl}/apirest.php/Document/${id}`, { headers });
+      return res.ok ? res.json() : null;
+    }));
+
+    return documents
+      .filter((doc: any) => doc && String(doc.mime || '').startsWith('image/'))
+      .map((doc: any) => ({
+        id: Number(doc.id),
+        name: doc.name || doc.filename || `Foto ${doc.id}`,
+        filename: doc.filename || '',
+        date: doc.date_creation || doc.date_mod || '',
+        categoryId: Number(doc.documentcategories_id) || undefined
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  }
+
+  /**
+   * Descarga el archivo de una foto y devuelve un object URL para mostrarla.
+   * GLPI exige los encabezados de sesión, así que no se puede usar la URL directo en <img>.
+   * Quien lo llama debe liberar la URL con URL.revokeObjectURL al dejar de mostrarla.
+   */
+  static async getPhotoObjectUrl(session: GLPISession, photo: GLPITaskPhoto): Promise<string> {
+    if (session.isMock) return photo.url || '';
+
+    const res = await fetch(`${session.baseUrl}/apirest.php/Document/${photo.id}`, {
+      headers: {
+        'Accept': 'application/octet-stream',
+        'App-Token': session.appToken,
+        'Session-Token': session.sessionToken
+      }
+    });
+    if (!res.ok) throw new Error(`No se pudo descargar la foto (${res.status})`);
+    return URL.createObjectURL(await res.blob());
+  }
+
+  /**
+   * Sube una foto (ya comprimida) como Document de GLPI con su rubro (Previo/Post) y la liga
+   * a la tarea. `index` distingue los nombres de archivo de fotos subidas en el mismo segundo.
+   */
+  static async uploadTaskPhoto(
+    session: GLPISession,
+    taskId: number,
+    taskName: string,
+    photo: Blob,
+    categoryId: number,
+    index = 0
+  ): Promise<GLPITaskPhoto> {
+    const stamp = this.toGlpiDateTime(new Date());
+    const category = PHOTO_CATEGORIES.find(c => c.id === categoryId);
+    const categorySlug = category ? category.label.split(' ')[0].toLowerCase() : 'foto';
+    const filename = `mantenimiento_${taskId}_${categorySlug}_${stamp.replace(/[-: ]/g, '')}_${index + 1}.jpg`;
+    const name = `${category?.label || 'Foto'} - ${taskName} - ${stamp} (${index + 1})`;
+
+    if (session.isMock) {
+      const photoEntry: GLPITaskPhoto = { id: Date.now() + index, name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
+      (MOCK_TASK_PHOTOS[taskId] ||= []).push(photoEntry);
+      return photoEntry;
+    }
+
+    const authHeaders = {
+      'App-Token': session.appToken,
+      'Session-Token': session.sessionToken
+    };
+    const readError = async (res: Response) => {
+      try {
+        const err = await res.json();
+        return Array.isArray(err) && err[1] ? `: ${err[1]}` : '';
+      } catch {
+        return '';
+      }
+    };
+
+    // 1) Crear el Document con el archivo (multipart: uploadManifest + filename[0])
+    const form = new FormData();
+    form.append('uploadManifest', JSON.stringify({
+      input: { name, documentcategories_id: categoryId, _filename: [filename] }
+    }));
+    form.append('filename[0]', photo, filename);
+    // Sin Content-Type: el navegador lo pone con el boundary del multipart
+    const docRes = await fetch(`${session.baseUrl}/apirest.php/Document`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: form
+    });
+    if (!docRes.ok) {
+      throw new Error(`No se pudo subir la foto a GLPI (${docRes.status})${await readError(docRes)}`);
+    }
+    const created = await docRes.json();
+    const documentId = Number(created?.id);
+    if (!documentId) throw new Error('GLPI no devolvió el ID del documento creado');
+
+    // 2) Ligar el Document a la tarea
+    const linkRes = await fetch(`${session.baseUrl}/apirest.php/Document_Item`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: { documents_id: documentId, itemtype: 'ProjectTask', items_id: taskId } })
+    });
+    if (!linkRes.ok) {
+      throw new Error(`La foto se subió (documento #${documentId}) pero no se pudo ligar a la tarea (${linkRes.status})${await readError(linkRes)}`);
+    }
+
+    return { id: documentId, name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
+  }
+
   /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
   private static toGlpiDateTime(date: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -1148,6 +1311,8 @@ const MOCK_PROJECTS: GLPIProject[] = [
     tasks_count: 5
   }
 ];
+
+const MOCK_TASK_PHOTOS: Record<number, GLPITaskPhoto[]> = {};
 
 const MOCK_TASK_NOTES: Record<number, GLPINote[]> = {
   22: [

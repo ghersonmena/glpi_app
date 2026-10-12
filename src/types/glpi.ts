@@ -114,3 +114,19 @@ export interface GLPINote {
   date: string;
   user_name?: string;
 }
+
+// Foto (Document de GLPI) ligada a una tarea de proyecto
+export interface GLPITaskPhoto {
+  id: number; // documents_id
+  name: string;
+  filename: string;
+  date: string;
+  categoryId?: number; // documentcategories_id (Previo / Post mantenimiento)
+  url?: string; // object URL local para mostrar la imagen (se descarga con la sesión)
+}
+
+// Rubro de documento de GLPI con el que se clasifican las fotos de evidencia
+export interface PhotoCategory {
+  id: number; // documentcategories_id
+  label: string;
+}
