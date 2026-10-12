@@ -13,30 +13,111 @@ import { Settings } from './components/Settings';
 import { ProjectList } from './components/ProjectList';
 import { ProjectTaskTree } from './components/ProjectTaskTree';
 
-export const App: React.FC = () => {
-  const [session, setSession] = useState<GLPISession | null>(() => {
-    const saved = sessionStorage.getItem('glpi_session');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return null;
-      }
+// La sesión se guarda en localStorage (sobrevive a recargas y a cerrar la pestaña) y caduca
+// tras 1 hora sin actividad; cada interacción con la app renueva el plazo.
+const SESSION_STORAGE_KEY = 'glpi_session';
+const SESSION_TTL_MS = 60 * 60 * 1000;
+// Ping al servidor para que GLPI no expire la sesión por inactividad mientras la app está abierta
+const SESSION_KEEPALIVE_MS = 5 * 60 * 1000;
+// Renovar el plazo como máximo una vez por minuto, no en cada clic
+const SESSION_RENEW_THROTTLE_MS = 60 * 1000;
+
+interface StoredSession {
+  session: GLPISession;
+  expiresAt: number;
+}
+
+const saveSession = (session: GLPISession) => {
+  try {
+    const stored: StoredSession = { session, expiresAt: Date.now() + SESSION_TTL_MS };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(stored));
+  } catch { /* sin localStorage (modo privado): la sesión solo dura mientras la página esté abierta */ }
+};
+
+const clearStoredSession = () => {
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch { /* nada que limpiar */ }
+};
+
+const loadStoredSession = (): GLPISession | null => {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const stored: StoredSession = JSON.parse(raw);
+    if (!stored?.session || !stored.expiresAt || stored.expiresAt < Date.now()) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
     }
+    return stored.session;
+  } catch {
     return null;
-  });
+  }
+};
+
+const isStoredSessionExpired = (): boolean => {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return true;
+    const stored: StoredSession = JSON.parse(raw);
+    return !stored?.expiresAt || stored.expiresAt < Date.now();
+  } catch {
+    return false; // sin localStorage no se puede comprobar: no cerrar la sesión
+  }
+};
+
+export const App: React.FC = () => {
+  const [session, setSession] = useState<GLPISession | null>(loadStoredSession);
 
   const [activeTab, setActiveTab] = useState<TabType>('projects');
   const [selectedTicket, setSelectedTicket] = useState<GLPITicket | null>(null);
   const [selectedProject, setSelectedProject] = useState<GLPIProject | null>(null);
 
-  // Guardar sesión en sessionStorage
+  // Guardar la sesión (con su caducidad) cada vez que cambia
   useEffect(() => {
-    if (session) {
-      sessionStorage.setItem('glpi_session', JSON.stringify(session));
-    } else {
-      sessionStorage.removeItem('glpi_session');
-    }
+    if (session) saveSession(session);
+    else clearStoredSession();
+  }, [session]);
+
+  // Mientras haya sesión: renovar el plazo con la actividad del usuario, mantener viva la
+  // sesión en GLPI y cerrar la app si caducó o si GLPI ya no la acepta.
+  useEffect(() => {
+    if (!session) return;
+
+    let lastRenew = Date.now();
+    const renewOnActivity = () => {
+      if (Date.now() - lastRenew < SESSION_RENEW_THROTTLE_MS) return;
+      lastRenew = Date.now();
+      saveSession(session);
+    };
+
+    const verify = async () => {
+      if (isStoredSessionExpired()) {
+        setSession(null);
+        return;
+      }
+      const alive = await GLPIService.pingSession(session);
+      if (!alive) {
+        console.warn('[GLPI] La sesión expiró en el servidor; se requiere iniciar sesión de nuevo.');
+        setSession(null);
+      }
+    };
+
+    // Al cargar (p. ej. tras refrescar) comprobar que GLPI siga aceptando el token guardado
+    verify();
+    const keepAlive = window.setInterval(verify, SESSION_KEEPALIVE_MS);
+    // Al volver a la app (otra pestaña, teléfono bloqueado) revisar si caducó mientras tanto
+    const onVisible = () => { if (document.visibilityState === 'visible') verify(); };
+
+    window.addEventListener('pointerdown', renewOnActivity);
+    window.addEventListener('keydown', renewOnActivity);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(keepAlive);
+      window.removeEventListener('pointerdown', renewOnActivity);
+      window.removeEventListener('keydown', renewOnActivity);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [session]);
 
   const handleLoginSuccess = (newSession: GLPISession) => {

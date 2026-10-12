@@ -505,6 +505,27 @@ export class GLPIService {
   /**
    * Cierra sesión en GLPI
    */
+  /**
+   * Comprueba que la sesión de GLPI siga viva (y la mantiene activa en el servidor).
+   * Devuelve false solo si GLPI la rechaza (401); ante errores de red devuelve true para
+   * no cerrar la sesión por una caída momentánea de conexión.
+   */
+  static async pingSession(session: GLPISession): Promise<boolean> {
+    if (session.isMock) return true;
+    try {
+      const response = await fetch(`${session.baseUrl}/apirest.php/getActiveProfile`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'App-Token': session.appToken,
+          'Session-Token': session.sessionToken
+        }
+      });
+      return response.status !== 401;
+    } catch {
+      return true;
+    }
+  }
+
   static async killSession(session: GLPISession): Promise<void> {
     if (session.isMock) return;
 
@@ -861,8 +882,54 @@ export class GLPIService {
    * Concluye un Hito o Tarea con 1 solo clic:
    * Guarda automáticamente en GLPI: percent_done = 100%, state = 3 (closed), real_end_date = fecha actual
    */
+  /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
+  private static toGlpiDateTime(date: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  private static closedStateIdCache = new Map<string, number>();
+
+  /**
+   * ID del estado de proyecto "terminado" (Closed). Se busca el ProjectState con
+   * is_finished = 1 en vez de fijarlo en el código, porque el ID depende de cada instalación.
+   */
+  private static async getClosedProjectStateId(session: GLPISession): Promise<number> {
+    const cached = this.closedStateIdCache.get(session.baseUrl);
+    if (cached) return cached;
+
+    const fallbackId = 3; // "Closed" en una instalación por defecto de GLPI
+    try {
+      const response = await fetch(`${session.baseUrl}/apirest.php/ProjectState?range=0-100`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'App-Token': session.appToken,
+          'Session-Token': session.sessionToken
+        }
+      });
+      if (response.ok) {
+        const states = await response.json();
+        const finished = Array.isArray(states)
+          ? states.find((st: any) => Number(st.is_finished) === 1)
+          : null;
+        if (finished?.id) {
+          this.closedStateIdCache.set(session.baseUrl, Number(finished.id));
+          return Number(finished.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[GLPI] No se pudo consultar ProjectState, se usa el estado por defecto:', err);
+    }
+    return fallbackId;
+  }
+
+  /**
+   * Concluye un hito con 1 clic: percent_done = 100, estado Closed y marca de tiempo
+   * (real_start_date = real_end_date = momento del clic).
+   */
   static async completeTaskMilestone(session: GLPISession, taskId: number, currentProjectId: number = 1): Promise<GLPIProjectTask> {
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const nowStr = this.toGlpiDateTime(new Date());
 
     if (session.isMock) {
       const tasks = MOCK_PROJECT_TASKS[currentProjectId] || MOCK_PROJECT_TASKS[1] || [];
@@ -870,6 +937,7 @@ export class GLPIService {
       if (found) {
         found.percent_done = 100;
         found.state = 3;
+        found.real_start_date = nowStr;
         found.real_end_date = nowStr;
         found.state_name = 'Concluida';
         return { ...found };
@@ -881,13 +949,17 @@ export class GLPIService {
       { app_token: session.appToken, session_token: session.sessionToken }
     );
 
+    const closedStateId = await this.getClosedProjectStateId(session);
     const payload = {
       input: {
         id: taskId,
         percent_done: 100,
-        state: 3, // Estado cerrado/concluido en GLPI
+        // El estado de una ProjectTask es projectstates_id; un campo "state" GLPI lo ignora
+        projectstates_id: closedStateId,
+        // Un hito no tiene duración: inicio y fin reales son la marca de tiempo del cierre.
         // No se toca plan_end_date: es la planificación original y sobrescribirla
-        // con la fecha de cierre alteraba el orden de las tareas en el árbol.
+        // alteraba el orden de las tareas en el árbol.
+        real_start_date: nowStr,
         real_end_date: nowStr
       }
     };
@@ -912,6 +984,7 @@ export class GLPIService {
     if (found) {
       found.percent_done = 100;
       found.state = 3;
+      found.real_start_date = nowStr;
       found.real_end_date = nowStr;
       found.state_name = 'Concluida';
       return { ...found };
@@ -925,6 +998,7 @@ export class GLPIService {
       percent_done: 100,
       is_milestone: true,
       state: 3,
+      real_start_date: nowStr,
       real_end_date: nowStr,
       state_name: 'Concluida'
     };

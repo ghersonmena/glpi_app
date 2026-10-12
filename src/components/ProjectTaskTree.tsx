@@ -264,16 +264,17 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
     setUpdatingTaskId(node.id);
 
     try {
-      await GLPIService.completeTaskMilestone(session, node.id, project.id);
+      const updated = await GLPIService.completeTaskMilestone(session, node.id, project.id);
 
-      // Actualizar estado plano local
+      // Actualizar estado plano local con lo mismo que se guardó en GLPI
       setFlatTasks(prev => prev.map(t => {
         if (t.id === node.id) {
           return {
             ...t,
             percent_done: 100,
             state: 3,
-            real_end_date: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            real_start_date: updated.real_start_date,
+            real_end_date: updated.real_end_date,
             state_name: 'Concluida'
           };
         }
