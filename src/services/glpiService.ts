@@ -1,4 +1,4 @@
-import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote, GLPITaskPhoto, PhotoCategory, TaskParticipant, GLPIUserOption } from '../types/glpi';
+import type { GLPIAuthConfig, GLPISession, GLPITicket, GLPIFollowup, GLPIUserSessionInfo, GLPIProject, GLPIProjectTask, GLPINote, GLPITaskPhoto, PhotoCategory, TaskParticipant, GLPIUserOption, LinkedElement, ElementDetails } from '../types/glpi';
 
 // Status labels & helper functions
 export const GLPI_STATUS_MAP: Record<number, { label: string; color: string; bg: string }> = {
@@ -112,6 +112,18 @@ export const PHOTO_CATEGORIES: PhotoCategory[] = [
   { id: 10, label: 'Previo mantenimiento' },
   { id: 11, label: 'Post mantenimiento' }
 ];
+
+/**
+ * Relación tarea → elemento del inventario. GLPI 10.0 no la trae para tareas; se guarda con el
+ * plugin Campos adicionales (Fields), bloque "Elementos" en tareas de proyecto, campo
+ * "Agregar un elemento". La API expone ese bloque como PluginFieldsProjecttaskelemento
+ * (sin el filtro de "mis tareas" que GLPI aplica a los listados de ProjectTask).
+ */
+const TASK_ELEMENTS_ITEMTYPE = 'PluginFieldsProjecttaskelemento';
+const TASK_ELEMENT_TYPE_FIELD = 'itemtype_agregarunelementofield';
+const TASK_ELEMENT_ID_FIELD = 'items_id_agregarunelementofield';
+// Campo "Etiqueta Física" del bloque "Etiqueta" en computadoras (plugin Campos adicionales)
+const PHYSICAL_TAG_FIELD = 'etiquetafisicafield';
 
 export class GLPIService {
   private static cleanUrl(url: string): string {
@@ -1353,6 +1365,136 @@ export class GLPIService {
     await this.putItem(session, 'Project', projectId, { name }, 'el proyecto');
   }
 
+  /** Elemento relacionado por tarea (key: id de tarea), según el plugin Campos adicionales. */
+  static async getTaskElements(session: GLPISession, taskIds: number[]): Promise<Record<number, LinkedElement>> {
+    const wanted = new Set(taskIds);
+    if (session.isMock) {
+      const result: Record<number, LinkedElement> = {};
+      Object.entries(MOCK_TASK_ELEMENTS).forEach(([taskId, el]) => {
+        if (wanted.has(Number(taskId))) result[Number(taskId)] = el;
+      });
+      return result;
+    }
+
+    const rows = await this.fetchAllPages(session, TASK_ELEMENTS_ITEMTYPE);
+    const result: Record<number, LinkedElement> = {};
+    rows.forEach((row: any) => {
+      const taskId = Number(row.items_id);
+      const itemtype = String(row[TASK_ELEMENT_TYPE_FIELD] || '');
+      const id = Number(row[TASK_ELEMENT_ID_FIELD]) || 0;
+      if (row.itemtype === 'ProjectTask' && wanted.has(taskId) && itemtype && id > 0) {
+        result[taskId] = { itemtype, id };
+      }
+    });
+    return result;
+  }
+
+  /** Elementos relacionados con un proyecto (pestaña "Elementos" nativa de GLPI, Item_Project). */
+  static async getProjectElements(session: GLPISession, projectId: number): Promise<LinkedElement[]> {
+    if (session.isMock) return MOCK_PROJECT_ELEMENTS[projectId] || [];
+
+    const rows = await this.fetchAllPages(session, `Project/${projectId}/Item_Project`);
+    return rows
+      .map((row: any) => ({ itemtype: String(row.itemtype), id: Number(row.items_id) }))
+      .filter(el => el.itemtype && el.id > 0);
+  }
+
+  private static physicalTagOptionCache = new Map<string, Promise<string | null>>();
+
+  /** Número de opción de búsqueda del campo "Etiqueta Física" (lo asigna el plugin; se busca por nombre de campo). */
+  private static getPhysicalTagOption(session: GLPISession): Promise<string | null> {
+    const key = session.baseUrl;
+    if (!this.physicalTagOptionCache.has(key)) {
+      const promise = (async () => {
+        const res = await fetch(`${session.baseUrl}/apirest.php/listSearchOptions/Computer`, {
+          headers: { 'App-Token': session.appToken, 'Session-Token': session.sessionToken }
+        });
+        if (!res.ok) return null;
+        const options = await res.json();
+        const found = Object.entries(options || {}).find(([, opt]: [string, any]) => opt?.field === PHYSICAL_TAG_FIELD);
+        return found ? found[0] : null;
+      })();
+      promise.catch(() => this.physicalTagOptionCache.delete(key));
+      this.physicalTagOptionCache.set(key, promise);
+    }
+    return this.physicalTagOptionCache.get(key)!;
+  }
+
+  /** Nombre, etiqueta física y ubicación de un elemento del inventario. */
+  static async getElementDetails(session: GLPISession, element: LinkedElement): Promise<ElementDetails> {
+    if (session.isMock) {
+      return MOCK_ELEMENT_DETAILS[`${element.itemtype}#${element.id}`]
+        || { ...element, name: `${element.itemtype} #${element.id}` };
+    }
+
+    const headers = { 'App-Token': session.appToken, 'Session-Token': session.sessionToken };
+
+    // Nombre completo (Nombre(s) + Apellido) del usuario asignado al equipo. El buscador solo
+    // da el login, así que se lee users_id de la ficha y luego la ficha del usuario.
+    const resolveAssignedUser = async (): Promise<string | undefined> => {
+      try {
+        const itemRes = await fetch(`${session.baseUrl}/apirest.php/${element.itemtype}/${element.id}`, { headers });
+        if (!itemRes.ok) return undefined;
+        const userId = Number((await itemRes.json())?.users_id) || 0;
+        if (!userId) return undefined;
+        const userRes = await fetch(`${session.baseUrl}/apirest.php/User/${userId}`, { headers });
+        return userRes.ok ? this.userDisplayName(await userRes.json()) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    // Computadoras: el buscador de GLPI trae nombre (1), ubicación completa (3), número de
+    // serie (5) y la etiqueta del plugin en una sola consulta; el usuario se resuelve en paralelo
+    if (element.itemtype === 'Computer') {
+      const tagOption = await this.getPhysicalTagOption(session).catch(() => null);
+      const params = new URLSearchParams({
+        'criteria[0][field]': '2',
+        'criteria[0][searchtype]': 'equals',
+        'criteria[0][value]': String(element.id),
+        'forcedisplay[0]': '1',
+        'forcedisplay[1]': '3',
+        'forcedisplay[2]': '5'
+      });
+      if (tagOption) params.set('forcedisplay[3]', tagOption);
+      const [res, userName] = await Promise.all([
+        fetch(`${session.baseUrl}/apirest.php/search/Computer?${params}`, { headers }),
+        resolveAssignedUser()
+      ]);
+      if (res.ok) {
+        const row = (await res.json())?.data?.[0];
+        if (row) {
+          return {
+            ...element,
+            name: row['1'] || `Computadora #${element.id}`,
+            location: row['3'] || undefined,
+            serial: row['5'] || undefined,
+            userName,
+            physicalTag: tagOption ? row[tagOption] || undefined : undefined
+          };
+        }
+      }
+    }
+
+    // Otros tipos (o si el buscador falla): ficha directa con la ubicación expandida
+    const [res, userName] = await Promise.all([
+      fetch(`${session.baseUrl}/apirest.php/${element.itemtype}/${element.id}?expand_dropdowns=true`, { headers }),
+      resolveAssignedUser()
+    ]);
+    if (!res.ok) throw new Error(`No se pudo consultar el elemento (${res.status})`);
+    const item = await res.json();
+    const location = typeof item.locations_id === 'string' && item.locations_id !== '0'
+      ? this.htmlToPlainText(item.locations_id)
+      : undefined;
+    return {
+      ...element,
+      name: item.name || `${element.itemtype} #${element.id}`,
+      serial: item.serial || undefined,
+      userName,
+      location
+    };
+  }
+
   /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
   private static toGlpiDateTime(date: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -1503,6 +1645,26 @@ const MOCK_PROJECTS: GLPIProject[] = [
 ];
 
 const MOCK_TASK_PHOTOS: Record<number, GLPITaskPhoto[]> = {};
+
+const MOCK_TASK_ELEMENTS: Record<number, LinkedElement> = {
+  21: { itemtype: 'Computer', id: 89 }
+};
+
+const MOCK_PROJECT_ELEMENTS: Record<number, LinkedElement[]> = {
+  1: [{ itemtype: 'Computer', id: 89 }]
+};
+
+const MOCK_ELEMENT_DETAILS: Record<string, ElementDetails> = {
+  'Computer#89': {
+    itemtype: 'Computer',
+    id: 89,
+    name: 'GhersonMenaPC',
+    physicalTag: 'PC-000103',
+    serial: 'MXL1234ABC',
+    userName: 'Gherson Eliezer Mena Alvarado',
+    location: 'Oficinas ACERO > Planta Baja > Sistemas > 8 Posicion'
+  }
+};
 
 const MOCK_USERS: GLPIUserOption[] = [
   { id: 3, name: 'Ana López', login: 'alopez' },

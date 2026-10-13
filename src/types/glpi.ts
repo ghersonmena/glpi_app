@@ -145,3 +145,20 @@ export interface GLPIUserOption {
   name: string; // "Nombre Apellido" o login
   login: string;
 }
+
+// Elemento del inventario (computadora, monitor...) relacionado con un proyecto o una tarea
+export interface LinkedElement {
+  itemtype: string; // Computer, Monitor, Printer...
+  id: number;
+}
+
+// Datos que se muestran al ver un elemento relacionado
+export interface ElementDetails {
+  itemtype: string;
+  id: number;
+  name: string;
+  physicalTag?: string; // "Etiqueta Física" (plugin Campos adicionales, solo computadoras)
+  serial?: string;      // número de serie
+  userName?: string;    // usuario que tiene asignado el equipo
+  location?: string;    // ruta completa de la ubicación
+}

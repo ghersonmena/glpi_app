@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode, TaskParticipant } from '../types/glpi';
+import type { GLPISession, GLPIProject, GLPIProjectTask, ProjectTaskNode, TaskParticipant, LinkedElement } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
 import { TaskNotes } from './TaskNotes';
 import { TaskPhotos } from './TaskPhotos';
 import { AssignParticipants } from './AssignParticipants';
 import { EditTaskSheet } from './EditTaskSheet';
+import { ElementDetailSheet } from './ElementDetailSheet';
 import { 
   Folder, 
   ChevronRight, 
@@ -23,7 +24,8 @@ import {
   UserPlus,
   Pencil,
   CalendarDays,
-  Monitor
+  Monitor,
+  Eye
 } from 'lucide-react';
 
 const stripAccents = (s: string) =>
@@ -103,6 +105,10 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
   const [editingNode, setEditingNode] = useState<ProjectTaskNode | null>(null);
   const [editingProject, setEditingProject] = useState<boolean>(false);
   const [projectName, setProjectName] = useState<string>(project.name);
+  // Elementos del inventario relacionados: por tarea (plugin Campos adicionales) y del proyecto
+  const [taskElements, setTaskElements] = useState<Record<number, LinkedElement>>({});
+  const [projectElements, setProjectElements] = useState<LinkedElement[]>([]);
+  const [viewingElements, setViewingElements] = useState<{ elements: LinkedElement[]; name: string } | null>(null);
 
   const fetchTasks = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -124,6 +130,14 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
         .then(setParticipants)
         .catch(err => console.warn('No se pudieron cargar los participantes de las tareas:', err))
         .finally(() => setParticipantsLoaded(true));
+
+      // Elementos del inventario relacionados (también sin retrasar el árbol)
+      GLPIService.getTaskElements(session, data.map(t => t.id))
+        .then(setTaskElements)
+        .catch(err => console.warn('No se pudieron cargar los elementos de las tareas:', err));
+      GLPIService.getProjectElements(session, project.id)
+        .then(setProjectElements)
+        .catch(err => console.warn('No se pudieron cargar los elementos del proyecto:', err));
 
       // La vista inicial debe mostrar los grupos del proyecto (por ejemplo, cada
       // jornada programada), no todas las actividades individuales de golpe.
@@ -503,6 +517,31 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
 
           {/* Lado Derecho: Accionador de 1-CLIC solo para tareas finales sin sub-tareas (nodos hoja) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px' }}>
+            {/* Ver el elemento del inventario relacionado (nombre, etiqueta física, ubicación) */}
+            {taskElements[node.id] && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewingElements({ elements: [taskElements[node.id]], name: node.name });
+                }}
+                title="Ver elemento relacionado"
+                aria-label="Ver elemento relacionado"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '6px 8px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(139, 92, 246, 0.4)',
+                  background: 'rgba(139, 92, 246, 0.08)',
+                  color: '#8b5cf6',
+                  cursor: 'pointer'
+                }}
+              >
+                <Eye size={14} />
+              </button>
+            )}
+
             {/* Fotos del mantenimiento: solo en la tarea del equipo */}
             {isEquipment && (
               <button
@@ -720,6 +759,21 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
           </button>
         </h3>
 
+        {projectElements.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setViewingElements({ elements: projectElements, name: projectName })}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '8px',
+              padding: '6px 10px', borderRadius: '10px', border: '1px solid rgba(139, 92, 246, 0.4)',
+              background: 'rgba(139, 92, 246, 0.08)', color: '#8b5cf6', fontWeight: 700, fontSize: '0.75rem', cursor: 'pointer'
+            }}
+          >
+            <Eye size={14} />
+            {projectElements.length === 1 ? 'Ver elemento relacionado' : `Ver ${projectElements.length} elementos relacionados`}
+          </button>
+        )}
+
         {/* Barra de progreso global del Proyecto */}
         <div style={{ marginTop: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 700, marginBottom: '4px' }}>
@@ -786,6 +840,15 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
           </button>
         </div>
       </div>
+
+      {viewingElements && (
+        <ElementDetailSheet
+          session={session}
+          elements={viewingElements.elements}
+          contextName={viewingElements.name}
+          onClose={() => setViewingElements(null)}
+        />
+      )}
 
       {editingNode && (
         <EditTaskSheet
