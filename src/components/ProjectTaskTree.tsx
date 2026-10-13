@@ -4,6 +4,7 @@ import { GLPIService } from '../services/glpiService';
 import { TaskNotes } from './TaskNotes';
 import { TaskPhotos } from './TaskPhotos';
 import { AssignParticipants } from './AssignParticipants';
+import { EditTaskSheet } from './EditTaskSheet';
 import { 
   Folder, 
   ChevronRight, 
@@ -19,7 +20,10 @@ import {
   Camera,
   User as UserIcon,
   Users as UsersIcon,
-  UserPlus
+  UserPlus,
+  Pencil,
+  CalendarDays,
+  Monitor
 } from 'lucide-react';
 
 const stripAccents = (s: string) =>
@@ -95,6 +99,10 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
   const [participantsLoaded, setParticipantsLoaded] = useState<boolean>(false);
   // Tarea cuyo selector de responsables está abierto
   const [assigningNode, setAssigningNode] = useState<ProjectTaskNode | null>(null);
+  // Edición de nombre / "Debajo de": tarea en edición, o el propio proyecto
+  const [editingNode, setEditingNode] = useState<ProjectTaskNode | null>(null);
+  const [editingProject, setEditingProject] = useState<boolean>(false);
+  const [projectName, setProjectName] = useState<string>(project.name);
 
   const fetchTasks = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -328,8 +336,12 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
     const isUpdating = updatingTaskId === node.id;
     // "Equipo" = tarea cuyos hijos son hitos (p. ej. MANTENIMIENTO DE EQUIPO DE X): ahí van las fotos
     const isEquipment = hasChildren && node.children.some(child => child.is_milestone);
+    // "Grupo" = agrupador de nivel superior (p. ej. MANTENIMIENTO PROGRAMADOS PARA <fecha>)
+    const isGroup = hasChildren && !isEquipment;
 
-    const indentPadding = node.level * 16;
+    // Cada nivel tiene su color de acento, ícono y tamaño para que no se confundan entre sí
+    const accentColor = isGroup ? 'var(--primary)' : isEquipment ? '#8b5cf6' : 'transparent';
+    const titleSize = isGroup ? '0.9rem' : isEquipment ? '0.84rem' : '0.82rem';
 
     return (
       <div key={node.id} style={{ marginBottom: '6px' }}>
@@ -340,9 +352,12 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '10px 12px',
-            paddingLeft: `${12 + indentPadding}px`,
-            background: hasChildren ? 'var(--card-bg)' : 'var(--bg-main)',
+            paddingLeft: '10px',
+            background: isGroup
+              ? 'linear-gradient(90deg, rgba(59, 130, 246, 0.10), var(--card-bg) 60%)'
+              : hasChildren ? 'var(--card-bg)' : 'var(--bg-main)',
             border: `1.5px solid ${isCompleted ? '#d1fae5' : 'var(--border-color)'}`,
+            borderLeft: hasChildren ? `4px solid ${accentColor}` : `1.5px solid ${isCompleted ? '#d1fae5' : 'var(--border-color)'}`,
             borderRadius: 'var(--radius-md)',
             cursor: hasChildren ? 'pointer' : 'default',
             boxShadow: hasChildren ? 'var(--shadow-sm)' : 'none',
@@ -361,7 +376,11 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
             )}
 
             {/* Icono diferenciador de tipo de nodo */}
-            {hasChildren ? (
+            {isGroup ? (
+              <CalendarDays size={18} color="var(--primary)" style={{ flexShrink: 0 }} />
+            ) : isEquipment ? (
+              <Monitor size={17} color="#8b5cf6" style={{ flexShrink: 0 }} />
+            ) : hasChildren ? (
               <Folder size={18} color="var(--primary)" />
             ) : node.is_milestone ? (
               <Flag size={16} color={isCompleted ? '#10b981' : '#f59e0b'} fill={isCompleted ? '#10b981' : 'transparent'} />
@@ -373,7 +392,7 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                 <span 
                   style={{ 
-                    fontSize: '0.85rem', 
+                    fontSize: titleSize, 
                     fontWeight: hasChildren ? 800 : 600, 
                     color: isCompleted ? '#059669' : 'var(--text-main)',
                     textDecoration: isCompleted && !hasChildren ? 'line-through' : 'none'
@@ -381,6 +400,22 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
                 >
                   {node.name}
                 </span>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingNode(node);
+                  }}
+                  title="Editar nombre / Debajo de"
+                  aria-label="Editar tarea"
+                  style={{
+                    display: 'inline-flex', padding: '2px', border: 'none', background: 'none',
+                    color: 'var(--text-muted)', cursor: 'pointer', opacity: 0.7
+                  }}
+                >
+                  <Pencil size={12} />
+                </button>
 
                 {node.is_milestone && (
                   <span 
@@ -581,7 +616,7 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
             session={session}
             taskId={node.id}
             taskName={node.name}
-            indent={indentPadding}
+            indent={0}
             onCountChange={(count) => setPhotoCounts(prev => ({ ...prev, [node.id]: count }))}
           />
         )}
@@ -590,14 +625,22 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
           <TaskNotes
             session={session}
             taskId={node.id}
-            indent={indentPadding}
+            indent={0}
             onCountChange={(count) => setNoteCounts(prev => ({ ...prev, [node.id]: count }))}
           />
         )}
 
         {/* Subnodo del Árbol (Hijos) */}
         {hasChildren && isExpanded && (
-          <div style={{ marginTop: '4px' }}>
+          <div
+            style={{
+              marginTop: '6px',
+              marginLeft: '10px',
+              paddingLeft: '10px',
+              // Línea guía del color del padre: deja claro qué filas pertenecen a qué grupo
+              borderLeft: `2px solid ${isGroup ? 'rgba(59, 130, 246, 0.35)' : isEquipment ? 'rgba(139, 92, 246, 0.35)' : 'var(--border-color)'}`
+            }}
+          >
             {node.children.map(child => renderTreeNode(child))}
           </div>
         )}
@@ -665,7 +708,16 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
         </div>
 
         <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', lineHeight: 1.3 }}>
-          {project.name}
+          {projectName}
+          <button
+            type="button"
+            onClick={() => setEditingProject(true)}
+            title="Editar nombre del proyecto"
+            aria-label="Editar nombre del proyecto"
+            style={{ marginLeft: '6px', padding: '2px', border: 'none', background: 'none', color: 'var(--text-muted)', cursor: 'pointer', verticalAlign: 'middle' }}
+          >
+            <Pencil size={14} />
+          </button>
         </h3>
 
         {/* Barra de progreso global del Proyecto */}
@@ -734,6 +786,44 @@ export const ProjectTaskTree: React.FC<ProjectTaskTreeProps> = ({ session, proje
           </button>
         </div>
       </div>
+
+      {editingNode && (
+        <EditTaskSheet
+          title="Editar tarea"
+          initialName={editingNode.name}
+          task={flatTasks.find(t => t.id === editingNode.id)}
+          allTasks={flatTasks}
+          onSave={async ({ name, parentId }) => {
+            const original = flatTasks.find(t => t.id === editingNode.id);
+            const changes: { name?: string; projecttasks_id?: number } = {};
+            if (name !== original?.name) changes.name = name;
+            if (parentId !== undefined && parentId !== (original?.projecttasks_id || 0)) changes.projecttasks_id = parentId;
+            await GLPIService.updateProjectTask(session, editingNode.id, changes);
+            setFlatTasks(prev => prev.map(t => (
+              t.id === editingNode.id ? { ...t, ...changes, parent_name_ref: '' } : t
+            )));
+            // Si se movió, abrir el nuevo padre para que se vea dónde quedó
+            if (changes.projecttasks_id) {
+              setExpandedNodes(prev => ({ ...prev, [changes.projecttasks_id!]: true }));
+            }
+            setToastMsg(changes.projecttasks_id !== undefined ? `"${name}" se movió y se guardó en GLPI.` : `"${name}" se guardó en GLPI.`);
+            setTimeout(() => setToastMsg(null), 3000);
+          }}
+          onClose={() => setEditingNode(null)}
+        />
+      )}
+
+      {editingProject && (
+        <EditTaskSheet
+          title="Editar proyecto"
+          initialName={projectName}
+          onSave={async ({ name }) => {
+            await GLPIService.updateProjectName(session, project.id, name);
+            setProjectName(name);
+          }}
+          onClose={() => setEditingProject(false)}
+        />
+      )}
 
       {assigningNode && (
         <AssignParticipants

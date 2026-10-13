@@ -1299,6 +1299,60 @@ export class GLPIService {
     if (!res.ok) throw new Error(`No se pudo quitar a ${participant.name} (${res.status})`);
   }
 
+  private static async putItem(session: GLPISession, itemtype: string, id: number, input: Record<string, unknown>, what: string): Promise<void> {
+    const res = await fetch(`${session.baseUrl}/apirest.php/${itemtype}/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'App-Token': session.appToken,
+        'Session-Token': session.sessionToken
+      },
+      body: JSON.stringify({ input: { id, ...input } })
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const err = await res.json();
+        if (Array.isArray(err) && err[1]) detail = `: ${err[1]}`;
+      } catch { /* respuesta sin JSON */ }
+      throw new Error(`No se pudo guardar ${what} en GLPI (${res.status})${detail}`);
+    }
+    // GLPI responde 200 aunque rechace el cambio (p. ej. sin permiso): viene [{ "<id>": false, message }]
+    try {
+      const body = await res.json();
+      const result = Array.isArray(body) ? body[0] : body;
+      if (result && result[String(id)] === false) {
+        throw new Error(`GLPI rechazó el cambio de ${what}${result.message ? `: ${result.message}` : ''}`);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('GLPI rechazó')) throw err;
+    }
+  }
+
+  /** Edita el nombre y/o la tarea padre ("Debajo de", 0 = nivel superior) de una tarea. */
+  static async updateProjectTask(
+    session: GLPISession,
+    taskId: number,
+    changes: { name?: string; projecttasks_id?: number }
+  ): Promise<void> {
+    if (session.isMock) {
+      Object.values(MOCK_PROJECT_TASKS).flat()
+        .filter(t => t.id === taskId)
+        .forEach(t => Object.assign(t, changes));
+      return;
+    }
+    await this.putItem(session, 'ProjectTask', taskId, changes, 'la tarea');
+  }
+
+  /** Edita el nombre de un proyecto. */
+  static async updateProjectName(session: GLPISession, projectId: number, name: string): Promise<void> {
+    if (session.isMock) {
+      MOCK_PROJECTS.filter(p => p.id === projectId).forEach(p => { p.name = name; });
+      return;
+    }
+    await this.putItem(session, 'Project', projectId, { name }, 'el proyecto');
+  }
+
   /** Fecha/hora LOCAL en formato GLPI ("YYYY-MM-DD HH:MM:SS"). toISOString() daría UTC (+6 h en México). */
   private static toGlpiDateTime(date: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');

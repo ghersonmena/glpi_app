@@ -228,7 +228,7 @@ export const TaskPhotos: React.FC<TaskPhotosProps> = ({ session, taskId, taskNam
       onClick={e => e.stopPropagation()}
       style={{
         marginTop: '4px',
-        marginLeft: `${12 + indent}px`,
+        marginLeft: `${indent}px`,
         padding: '10px 12px',
         background: 'var(--card-bg)',
         border: '1px dashed var(--border-color)',

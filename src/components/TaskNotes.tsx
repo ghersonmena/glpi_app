@@ -76,7 +76,7 @@ export const TaskNotes: React.FC<TaskNotesProps> = ({ session, taskId, indent, o
       onClick={e => e.stopPropagation()}
       style={{
         marginTop: '4px',
-        marginLeft: `${12 + indent}px`,
+        marginLeft: `${indent}px`,
         padding: '10px 12px',
         background: 'var(--card-bg)',
         border: '1px dashed var(--border-color)',
