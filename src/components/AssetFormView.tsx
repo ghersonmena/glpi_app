@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import type { GLPISession } from '../types/glpi';
-import { AssetService, getAssetType, emptyAssetForm } from '../services/assetService';
+import { AssetService, getAssetType, emptyAssetForm, ASSET_PHOTO_CATEGORY } from '../services/assetService';
+import { GLPIService } from '../services/glpiService';
 import type { AssetForm, DropdownOption, PluginFieldKey } from '../services/assetService';
 import { SearchSelect } from './SearchSelect';
 import { AssetHardwareSection, AssetNetworkSection } from './AssetInfoSections';
 import { ScannerModal } from './ScannerModal';
+import { ItemPhotos } from './ItemPhotos';
 import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine } from 'lucide-react';
 
 interface AssetFormViewProps {
@@ -44,7 +46,7 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
   // Campos del plugin Campos adicionales que tiene este tipo (etiqueta física, fechas)
   const [pluginFields, setPluginFields] = useState<PluginFieldKey[]>([]);
   // Pestañas en edición: datos editables, hardware (computadoras) y red (solo lectura)
-  const [tab, setTab] = useState<'data' | 'hardware' | 'network'>('data');
+  const [tab, setTab] = useState<'data' | 'hardware' | 'network' | 'photos'>('data');
   // Campo que se está escaneando con la cámara (código de barras u OCR)
   const [scanning, setScanning] = useState<{ key: ScannableField; label: string } | null>(null);
   const [dropdowns, setDropdowns] = useState<Dropdowns>(emptyDropdowns);
@@ -229,8 +231,9 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
           {([
             ['data', 'Datos'],
             ...(itemtype === 'Computer' ? [['hardware', 'Hardware']] : []),
-            ['network', 'Red']
-          ] as ['data' | 'hardware' | 'network', string][]).map(([key, label]) => (
+            ['network', 'Red'],
+            ['photos', 'Fotos']
+          ] as ['data' | 'hardware' | 'network' | 'photos', string][]).map(([key, label]) => (
             <button
               key={key}
               type="button"
@@ -253,6 +256,29 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
       )}
       {!isNew && tab === 'network' && currentId !== null && (
         <AssetNetworkSection session={session} itemtype={itemtype} assetId={currentId} />
+      )}
+      {!isNew && tab === 'photos' && currentId !== null && (
+        <ItemPhotos
+          session={session}
+          sourceKey={`${itemtype}#${currentId}`}
+          categories={[ASSET_PHOTO_CATEGORY]}
+          loadPhotos={() => GLPIService.getItemPhotos(session, itemtype, currentId)}
+          uploadPhoto={(photo, categoryId, index) => {
+            // Nombre y archivo legibles en GLPI: "Foto de activo - <nombre> - <fecha> (n)"
+            const now = new Date();
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+            const assetName = original.name || `${config.singular} #${currentId}`;
+            return GLPIService.uploadItemPhoto(session, {
+              itemtype,
+              itemId: currentId,
+              name: `Foto de activo - ${assetName} - ${stamp} (${index + 1})`,
+              filename: `activo_${itemtype.toLowerCase()}_${currentId}_${stamp.replace(/[-: ]/g, '')}_${index + 1}.jpg`,
+              categoryId,
+              photo
+            });
+          }}
+        />
       )}
 
       {(isNew || tab === 'data') && (loadingAsset ? (

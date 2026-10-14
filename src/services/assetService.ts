@@ -23,6 +23,10 @@ export const ASSET_TYPES: AssetTypeConfig[] = [
   { itemtype: 'NetworkEquipment', label: 'Equipos de red', singular: 'Equipo de red', typeField: 'networkequipmenttypes_id', typeItemtype: 'NetworkEquipmentType', modelField: 'networkequipmentmodels_id', modelItemtype: 'NetworkEquipmentModel', stateVisibility: 'is_visible_networkequipment' }
 ];
 
+// Rubro de documento con el que se clasifican las fotos del activo al inventariarlo:
+// DOCUMENTACION INVENTARIO > FOTOS DE ACTIVO (front/documentcategory.form.php?id=13)
+export const ASSET_PHOTO_CATEGORY = { id: 13, label: 'Fotos de activo' };
+
 export const getAssetType = (itemtype: string): AssetTypeConfig =>
   ASSET_TYPES.find(t => t.itemtype === itemtype) || ASSET_TYPES[0];
 

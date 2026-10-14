@@ -1052,6 +1052,17 @@ export class GLPIService {
     if (session.isMock) {
       return [...(MOCK_TASK_PHOTOS[taskId] || [])].sort((a, b) => b.date.localeCompare(a.date));
     }
+    return this.getItemPhotos(session, 'ProjectTask', taskId);
+  }
+
+  /**
+   * Fotos (Documents de imagen) ligadas a cualquier elemento de GLPI (tarea, computadora,
+   * monitor...), de la más reciente a la más antigua.
+   */
+  static async getItemPhotos(session: GLPISession, itemtype: string, itemId: number): Promise<GLPITaskPhoto[]> {
+    if (session.isMock) {
+      return [...(MOCK_ITEM_PHOTOS[`${itemtype}#${itemId}`] || [])].sort((a, b) => b.date.localeCompare(a.date));
+    }
 
     const headers = {
       'Content-Type': 'application/json',
@@ -1060,11 +1071,11 @@ export class GLPIService {
     };
 
     const linksRes = await fetch(
-      `${session.baseUrl}/apirest.php/ProjectTask/${taskId}/Document_Item?range=0-999`,
+      `${session.baseUrl}/apirest.php/${itemtype}/${itemId}/Document_Item?range=0-999`,
       { headers }
     );
     if (!linksRes.ok) {
-      throw new Error(`No se pudieron cargar las fotos de la tarea (${linksRes.status})`);
+      throw new Error(`No se pudieron cargar las fotos (${linksRes.status})`);
     }
     const links = await linksRes.json();
     if (!Array.isArray(links) || links.length === 0) return [];
@@ -1121,13 +1132,39 @@ export class GLPIService {
     const stamp = this.toGlpiDateTime(new Date());
     const category = PHOTO_CATEGORIES.find(c => c.id === categoryId);
     const categorySlug = category ? category.label.split(' ')[0].toLowerCase() : 'foto';
-    const filename = `mantenimiento_${taskId}_${categorySlug}_${stamp.replace(/[-: ]/g, '')}_${index + 1}.jpg`;
-    const name = `${category?.label || 'Foto'} - ${taskName} - ${stamp} (${index + 1})`;
 
     if (session.isMock) {
-      const photoEntry: GLPITaskPhoto = { id: Date.now() + index, name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
+      const name = `${category?.label || 'Foto'} - ${taskName} - ${stamp} (${index + 1})`;
+      const photoEntry: GLPITaskPhoto = { id: Date.now() + index, name, filename: `${name}.jpg`, date: stamp, categoryId, url: URL.createObjectURL(photo) };
       (MOCK_TASK_PHOTOS[taskId] ||= []).push(photoEntry);
       return photoEntry;
+    }
+
+    return this.uploadItemPhoto(session, {
+      itemtype: 'ProjectTask',
+      itemId: taskId,
+      name: `${category?.label || 'Foto'} - ${taskName} - ${stamp} (${index + 1})`,
+      filename: `mantenimiento_${taskId}_${categorySlug}_${stamp.replace(/[-: ]/g, '')}_${index + 1}.jpg`,
+      categoryId,
+      photo
+    });
+  }
+
+  /**
+   * Sube una foto (ya comprimida) como Document de GLPI con su rubro y la liga a cualquier
+   * elemento (tarea, computadora, monitor...). Dos pasos: crear el Document y el Document_Item.
+   */
+  static async uploadItemPhoto(
+    session: GLPISession,
+    params: { itemtype: string; itemId: number; name: string; filename: string; categoryId: number; photo: Blob }
+  ): Promise<GLPITaskPhoto> {
+    const { itemtype, itemId, name, filename, categoryId, photo } = params;
+    const stamp = this.toGlpiDateTime(new Date());
+
+    if (session.isMock) {
+      const entry: GLPITaskPhoto = { id: Date.now() + Math.floor(Math.random() * 1000), name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
+      (MOCK_ITEM_PHOTOS[`${itemtype}#${itemId}`] ||= []).push(entry);
+      return entry;
     }
 
     const authHeaders = {
@@ -1162,14 +1199,14 @@ export class GLPIService {
     const documentId = Number(created?.id);
     if (!documentId) throw new Error('GLPI no devolvió el ID del documento creado');
 
-    // 2) Ligar el Document a la tarea
+    // 2) Ligar el Document al elemento
     const linkRes = await fetch(`${session.baseUrl}/apirest.php/Document_Item`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: { documents_id: documentId, itemtype: 'ProjectTask', items_id: taskId } })
+      body: JSON.stringify({ input: { documents_id: documentId, itemtype, items_id: itemId } })
     });
     if (!linkRes.ok) {
-      throw new Error(`La foto se subió (documento #${documentId}) pero no se pudo ligar a la tarea (${linkRes.status})${await readError(linkRes)}`);
+      throw new Error(`La foto se subió (documento #${documentId}) pero no se pudo ligar (${linkRes.status})${await readError(linkRes)}`);
     }
 
     return { id: documentId, name, filename, date: stamp, categoryId, url: URL.createObjectURL(photo) };
@@ -1648,6 +1685,7 @@ const MOCK_PROJECTS: GLPIProject[] = [
 ];
 
 const MOCK_TASK_PHOTOS: Record<number, GLPITaskPhoto[]> = {};
+const MOCK_ITEM_PHOTOS: Record<string, GLPITaskPhoto[]> = {};
 
 const MOCK_TASK_ELEMENTS: Record<number, LinkedElement> = {
   21: { itemtype: 'Computer', id: 89 }
