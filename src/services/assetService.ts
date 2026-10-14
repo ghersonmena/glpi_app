@@ -37,6 +37,15 @@ export interface AssetSummary {
   state?: string;
 }
 
+// Campos del plugin Campos adicionales (bloque "Etiqueta"). Solo se muestran y guardan en los
+// tipos de activo que tienen el bloque configurado (hoy: computadoras).
+export type PluginFieldKey = 'physicalTag' | 'acquisitionDate' | 'retirementDate';
+const PLUGIN_FIELD_NAMES: Record<PluginFieldKey, string> = {
+  physicalTag: PHYSICAL_TAG_FIELD,
+  acquisitionDate: 'fechadeadquisicindeequipofield',
+  retirementDate: 'fechadebajadeequipofield'
+};
+
 // Datos editables de un activo (FKs como IDs; 0 = sin valor)
 export interface AssetForm {
   name: string;
@@ -49,14 +58,41 @@ export interface AssetForm {
   serial: string;
   otherserial: string; // número de inventario
   uuid: string;
-  physicalTag: string; // solo si el tipo tiene el campo del plugin
+  physicalTag: string;     // campos del plugin: solo si el tipo los tiene
+  acquisitionDate: string; // "YYYY-MM-DD" o ""
+  retirementDate: string;  // "YYYY-MM-DD" o ""
   comment: string;
 }
 
 export const emptyAssetForm = (): AssetForm => ({
   name: '', states_id: 0, typeId: 0, manufacturers_id: 0, modelId: 0, locations_id: 0,
-  users_id: 0, serial: '', otherserial: '', uuid: '', physicalTag: '', comment: ''
+  users_id: 0, serial: '', otherserial: '', uuid: '', physicalTag: '', acquisitionDate: '', retirementDate: '', comment: ''
 });
+
+// Sistema operativo y hardware de un equipo (lo que llena el inventario automático de GLPI)
+export interface AssetTechInfo {
+  os?: { name: string; version?: string; architecture?: string; kernel?: string; installDate?: string };
+  processors: { name: string; cores?: number; threads?: number; frequencyMHz?: number }[];
+  memory: { totalMB: number; modules: { type: string; sizeMB: number }[] };
+  disks: { name: string; mountpoint: string; filesystem?: string; totalMB: number; freeMB: number }[];
+}
+
+export interface IpAddressInfo {
+  address: string;
+  version: number;   // 4 o 6
+  useful: boolean;   // false para loopback y link-local (127.0.0.1, ::1, fe80::, 169.254.x.x)
+}
+
+export interface NetworkPortInfo {
+  id: number;
+  name: string;
+  mac?: string;
+  ips: IpAddressInfo[];
+  virtual: boolean;  // interfaz virtual (loopback, Docker, puentes, VPN...): se muestra al final
+}
+
+// Interfaces que no son tarjetas de red físicas
+const VIRTUAL_PORT = /^(lo|loopback|docker\d*|br-|virbr|veth|vmnet|vboxnet|tun|tap|wg|zt|tailscale|cni|flannel|kube)/i;
 
 // Búsqueda guardada de GLPI ("filtro") para un tipo de activo
 export interface SavedFilter {
@@ -103,6 +139,18 @@ const MOCK_DROPDOWNS: Record<string, DropdownOption[]> = {
   Manufacturer: [{ id: 1, label: 'Dell' }, { id: 2, label: 'HP' }, { id: 3, label: 'Lenovo' }]
 };
 
+const MOCK_TECH: AssetTechInfo = {
+  os: { name: 'Windows 11 Pro', version: '23H2', architecture: '64-bit', installDate: '2025-02-10' },
+  processors: [{ name: 'Intel(R) Core(TM) i5-12400', cores: 6, threads: 12 }],
+  memory: { totalMB: 16384, modules: [{ type: 'DDR4 - DIMM', sizeMB: 8192 }, { type: 'DDR4 - DIMM', sizeMB: 8192 }] },
+  disks: [{ name: 'C:', mountpoint: 'C:', filesystem: 'NTFS', totalMB: 487000, freeMB: 212000 }]
+};
+
+const MOCK_NETWORK: NetworkPortInfo[] = [
+  { id: 1, name: 'Ethernet', mac: '74:56:3c:9a:8d:c4', ips: [{ address: '10.11.21.59', version: 4, useful: true }], virtual: false },
+  { id: 2, name: 'Loopback', ips: [{ address: '127.0.0.1', version: 4, useful: false }], virtual: true }
+];
+
 const MOCK_FILTERS: (SavedFilter & { itemtype: string })[] = [
   { id: 1, itemtype: 'Computer', name: 'EQUIPOS EN USO', query: 'criteria[0][field]=31&criteria[0][searchtype]=equals&criteria[0][value]=1', isPrivate: false, isDefault: true },
   { id: 2, itemtype: 'Computer', name: 'EQUIPOS EN ALMACÉN', query: 'criteria[0][field]=31&criteria[0][searchtype]=equals&criteria[0][value]=2', isPrivate: true, isDefault: false }
@@ -111,10 +159,33 @@ const MOCK_FILTERS: (SavedFilter & { itemtype: string })[] = [
 export class AssetService {
   private static dropdownCache = new Map<string, Promise<DropdownOption[]>>();
 
-  /** ¿Este tipo de activo tiene el campo "Etiqueta Física" del plugin Campos adicionales? */
-  static async supportsPhysicalTag(session: GLPISession, itemtype: string): Promise<boolean> {
-    if (session.isMock) return itemtype === 'Computer';
-    return (await GLPIService.getPhysicalTagOption(session, itemtype).catch(() => null)) !== null;
+  private static pluginOptionsCache = new Map<string, Promise<Partial<Record<PluginFieldKey, string>>>>();
+
+  /**
+   * Campos del plugin que tiene este tipo de activo y su número de opción de búsqueda (el plugin
+   * lo asigna al crear el campo; se busca por nombre de campo). Vacío si el tipo no tiene el bloque.
+   */
+  static getPluginFieldOptions(session: GLPISession, itemtype: string): Promise<Partial<Record<PluginFieldKey, string>>> {
+    if (session.isMock) {
+      return Promise.resolve(itemtype === 'Computer' ? { physicalTag: '1', acquisitionDate: '2', retirementDate: '3' } : {});
+    }
+    const key = `${session.baseUrl}#${itemtype}`;
+    if (!this.pluginOptionsCache.has(key)) {
+      const promise = (async () => {
+        const res = await fetch(`${session.baseUrl}/apirest.php/listSearchOptions/${itemtype}`, { headers: authHeaders(session) });
+        if (!res.ok) return {};
+        const options: Record<string, any> = await res.json();
+        const found: Partial<Record<PluginFieldKey, string>> = {};
+        (Object.keys(PLUGIN_FIELD_NAMES) as PluginFieldKey[]).forEach(fieldKey => {
+          const entry = Object.entries(options || {}).find(([, opt]) => opt?.field === PLUGIN_FIELD_NAMES[fieldKey]);
+          if (entry) found[fieldKey] = entry[0];
+        });
+        return found;
+      })();
+      promise.catch(() => this.pluginOptionsCache.delete(key));
+      this.pluginOptionsCache.set(key, promise);
+    }
+    return this.pluginOptionsCache.get(key)!;
   }
 
   /**
@@ -218,16 +289,26 @@ export class AssetService {
       return { ...found };
     }
 
-    const tagOption = await GLPIService.getPhysicalTagOption(session, itemtype).catch(() => null);
-    const [itemRes, tagRes] = await Promise.all([
+    // Los campos del plugin no vienen en la ficha: se leen con el buscador, en paralelo
+    const pluginOptions = await this.getPluginFieldOptions(session, itemtype).catch(() => ({}));
+    const optionIds = Object.values(pluginOptions) as string[];
+    const pluginParams = new URLSearchParams({
+      'criteria[0][field]': SO.id, 'criteria[0][searchtype]': 'equals', 'criteria[0][value]': String(id)
+    });
+    optionIds.forEach((opt, i) => pluginParams.set(`forcedisplay[${i}]`, opt));
+    const [itemRes, pluginRes] = await Promise.all([
       fetch(`${session.baseUrl}/apirest.php/${itemtype}/${id}`, { headers: authHeaders(session) }),
-      tagOption
-        ? fetch(`${session.baseUrl}/apirest.php/search/${itemtype}?criteria[0][field]=${SO.id}&criteria[0][searchtype]=equals&criteria[0][value]=${id}&forcedisplay[0]=${tagOption}`, { headers: authHeaders(session) })
+      optionIds.length
+        ? fetch(`${session.baseUrl}/apirest.php/search/${itemtype}?${pluginParams}`, { headers: authHeaders(session) })
         : Promise.resolve(null)
     ]);
     if (!itemRes.ok) throw new Error(`No se pudo cargar el activo (${itemRes.status})${await readError(itemRes)}`);
     const item = await itemRes.json();
-    const tagRow = tagRes && tagRes.ok ? (await tagRes.json())?.data?.[0] : null;
+    const pluginRow = pluginRes && pluginRes.ok ? (await pluginRes.json())?.data?.[0] : null;
+    const pluginValue = (fieldKey: PluginFieldKey) => {
+      const opt = (pluginOptions as Partial<Record<PluginFieldKey, string>>)[fieldKey];
+      return (opt && pluginRow?.[opt]) ? String(pluginRow[opt]) : '';
+    };
 
     return {
       name: item.name || '',
@@ -240,12 +321,14 @@ export class AssetService {
       serial: item.serial || '',
       otherserial: item.otherserial || '',
       uuid: item.uuid || '',
-      physicalTag: (tagOption && tagRow?.[tagOption]) || '',
+      physicalTag: pluginValue('physicalTag'),
+      acquisitionDate: pluginValue('acquisitionDate').slice(0, 10),
+      retirementDate: pluginValue('retirementDate').slice(0, 10),
       comment: item.comment || ''
     };
   }
 
-  private static toInput(itemtype: string, form: AssetForm, withPhysicalTag: boolean): Record<string, unknown> {
+  private static toInput(itemtype: string, form: AssetForm, pluginFields: PluginFieldKey[]): Record<string, unknown> {
     const config = getAssetType(itemtype);
     const input: Record<string, unknown> = {
       name: form.name.trim(),
@@ -260,13 +343,15 @@ export class AssetService {
       uuid: form.uuid.trim(),
       comment: form.comment
     };
-    // El plugin Campos adicionales guarda su campo si viene junto con los datos del activo
-    if (withPhysicalTag) input[PHYSICAL_TAG_FIELD] = form.physicalTag.trim();
+    // El plugin Campos adicionales guarda sus campos si vienen junto con los datos del activo
+    pluginFields.forEach(fieldKey => {
+      input[PLUGIN_FIELD_NAMES[fieldKey]] = form[fieldKey].trim();
+    });
     return input;
   }
 
   /** Crea un activo y devuelve su ID. */
-  static async createAsset(session: GLPISession, itemtype: string, form: AssetForm, withPhysicalTag: boolean): Promise<number> {
+  static async createAsset(session: GLPISession, itemtype: string, form: AssetForm, pluginFields: PluginFieldKey[]): Promise<number> {
     if (session.isMock) {
       const id = ++mockSeq;
       (MOCK_ASSETS[itemtype] ||= []).push({ ...form, id });
@@ -275,7 +360,7 @@ export class AssetService {
     const res = await fetch(`${session.baseUrl}/apirest.php/${itemtype}`, {
       method: 'POST',
       headers: authHeaders(session),
-      body: JSON.stringify({ input: this.toInput(itemtype, form, withPhysicalTag) })
+      body: JSON.stringify({ input: this.toInput(itemtype, form, pluginFields) })
     });
     if (!res.ok) throw new Error(`No se pudo crear el activo (${res.status})${await readError(res)}`);
     const created = await res.json();
@@ -285,14 +370,124 @@ export class AssetService {
   }
 
   /** Guarda los cambios de un activo existente. */
-  static async updateAsset(session: GLPISession, itemtype: string, id: number, form: AssetForm, withPhysicalTag: boolean): Promise<void> {
+  static async updateAsset(session: GLPISession, itemtype: string, id: number, form: AssetForm, pluginFields: PluginFieldKey[]): Promise<void> {
     if (session.isMock) {
       const list = MOCK_ASSETS[itemtype] || [];
       const index = list.findIndex(a => a.id === id);
       if (index >= 0) list[index] = { ...form, id };
       return;
     }
-    await GLPIService.putItem(session, itemtype, id, this.toInput(itemtype, form, withPhysicalTag), 'el activo');
+    await GLPIService.putItem(session, itemtype, id, this.toInput(itemtype, form, pluginFields), 'el activo');
+  }
+
+  /** Sistema operativo, procesador, memoria RAM y discos de un equipo. */
+  static async getTechInfo(session: GLPISession, itemtype: string, id: number): Promise<AssetTechInfo> {
+    if (session.isMock) return MOCK_TECH;
+
+    const text = (value: unknown) => (typeof value === 'string' && value !== '0' ? GLPIService.htmlToPlainText(value) : undefined);
+    // expand_dropdowns trae los nombres (SO, procesador, tipo de memoria) en lugar de IDs
+    const expanded = (path: string) =>
+      fetch(`${session.baseUrl}/apirest.php/${itemtype}/${id}/${path}?expand_dropdowns=true&range=0-200`, { headers: authHeaders(session) })
+        .then(res => (res.ok ? res.json() : []))
+        .then(rows => (Array.isArray(rows) ? rows.filter((r: any) => !Number(r.is_deleted)) : []))
+        .catch(() => [] as any[]);
+
+    const [osRows, cpuRows, memRows, diskRows] = await Promise.all([
+      expanded('Item_OperatingSystem'),
+      expanded('Item_DeviceProcessor'),
+      expanded('Item_DeviceMemory'),
+      expanded('Item_Disk')
+    ]);
+
+    const os = osRows[0];
+    const modules = memRows.map((m: any) => ({ type: text(m.devicememories_id) || 'Memoria', sizeMB: Number(m.size) || 0 }));
+    return {
+      os: os ? {
+        name: text(os.operatingsystems_id) || 'Sistema operativo',
+        version: text(os.operatingsystemversions_id),
+        architecture: text(os.operatingsystemarchitectures_id),
+        kernel: text(os.operatingsystemkernelversions_id),
+        installDate: os.install_date || undefined
+      } : undefined,
+      processors: cpuRows.map((c: any) => ({
+        name: text(c.deviceprocessors_id) || 'Procesador',
+        cores: Number(c.nbcores) || undefined,
+        threads: Number(c.nbthreads) || undefined,
+        frequencyMHz: Number(c.frequency) || undefined
+      })),
+      memory: { totalMB: modules.reduce((sum, m) => sum + m.sizeMB, 0), modules },
+      // Solo discos reales: los sistemas de archivos virtuales (efivars, tmpfs...) reportan 0 MB
+      disks: diskRows
+        .filter((d: any) => !Number(d.is_deleted) && Number(d.totalsize) > 0)
+        .map((d: any) => ({
+          name: d.name || d.mountpoint || d.device || 'Disco',
+          mountpoint: d.mountpoint || '',
+          filesystem: text(d.filesystems_id),
+          totalMB: Number(d.totalsize) || 0,
+          freeMB: Number(d.freesize) || 0
+        }))
+    };
+  }
+
+  /**
+   * Puertos de red del activo con sus IPs. GLPI guarda Puerto → Nombre de red → IP; las IPs se
+   * traen en una sola consulta (por mainitems_id) y se asignan a su puerto por el nombre de red.
+   */
+  static async getNetwork(session: GLPISession, itemtype: string, id: number): Promise<NetworkPortInfo[]> {
+    if (session.isMock) return MOCK_NETWORK;
+
+    const isUseful = (ip: string) =>
+      !/^127\./.test(ip) && ip !== '::1' && !/^fe80:/i.test(ip) && !/^169\.254\./.test(ip);
+
+    const ports = (await GLPIService.fetchAllPages(session, `${itemtype}/${id}/NetworkPort`))
+      .filter((p: any) => !Number(p.is_deleted));
+
+    // Nombre de red (NetworkName) de cada puerto → id de puerto
+    const portOfName = new Map<number, number>();
+    await Promise.all(ports.map(async (port: any) => {
+      const names = await GLPIService.fetchAllPages(session, `NetworkPort/${port.id}/NetworkName`).catch(() => [] as any[]);
+      names.forEach((n: any) => portOfName.set(Number(n.id), Number(port.id)));
+    }));
+
+    // Todas las IPs del activo. searchText es "contiene", así que se filtra el id exacto
+    const ips: any[] = [];
+    for (let start = 0; start < 5000; start += 50) {
+      const res = await fetch(
+        `${session.baseUrl}/apirest.php/IPAddress?searchText[mainitems_id]=${id}&range=${start}-${start + 49}`,
+        { headers: authHeaders(session) }
+      );
+      if (!res.ok) break;
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      ips.push(...rows);
+      if (rows.length < 50 && res.status === 200) break;
+    }
+
+    const byPort = new Map<number, IpAddressInfo[]>();
+    ips
+      .filter((ip: any) => ip.mainitemtype === itemtype && Number(ip.mainitems_id) === id && !Number(ip.is_deleted))
+      .forEach((ip: any) => {
+        const portId = portOfName.get(Number(ip.items_id)) ?? 0;
+        if (!byPort.has(portId)) byPort.set(portId, []);
+        byPort.get(portId)!.push({ address: String(ip.name), version: Number(ip.version) || 4, useful: isUseful(String(ip.name)) });
+      });
+
+    const sortIps = (list: IpAddressInfo[]) =>
+      list.sort((a, b) => Number(b.useful) - Number(a.useful) || a.version - b.version || a.address.localeCompare(b.address));
+
+    const result: NetworkPortInfo[] = ports.map((p: any) => ({
+      id: Number(p.id),
+      name: p.name || `Puerto ${p.logical_number ?? p.id}`,
+      mac: p.mac && p.mac !== '00:00:00:00:00:00' ? p.mac : undefined,
+      ips: sortIps(byPort.get(Number(p.id)) || []),
+      virtual: VIRTUAL_PORT.test(String(p.name || ''))
+    }));
+    // IPs sin puerto identificado (p. ej. capturadas a mano)
+    if (byPort.has(0)) result.push({ id: 0, name: 'Sin puerto', ips: sortIps(byPort.get(0)!), virtual: false });
+
+    // Primero las tarjetas físicas con IPs útiles; al final las virtuales y las que no tienen IP
+    const rank = (p: NetworkPortInfo) => (p.virtual ? 2 : 0) + (p.ips.some(ip => ip.useful) ? 0 : 1);
+    return result.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   }
 
   /** Opciones de un desplegable de GLPI (se cachean durante la sesión). */

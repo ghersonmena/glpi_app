@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import type { GLPISession } from '../types/glpi';
 import { AssetService, getAssetType, emptyAssetForm } from '../services/assetService';
-import type { AssetForm, DropdownOption } from '../services/assetService';
+import type { AssetForm, DropdownOption, PluginFieldKey } from '../services/assetService';
 import { SearchSelect } from './SearchSelect';
-import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint } from 'lucide-react';
+import { AssetHardwareSection, AssetNetworkSection } from './AssetInfoSections';
+import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX } from 'lucide-react';
 
 interface AssetFormViewProps {
   session: GLPISession;
@@ -35,7 +36,10 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
   const [currentId, setCurrentId] = useState<number | null>(assetId);
   const [form, setForm] = useState<AssetForm>(emptyAssetForm());
   const [original, setOriginal] = useState<AssetForm>(emptyAssetForm());
-  const [hasPhysicalTag, setHasPhysicalTag] = useState<boolean>(false);
+  // Campos del plugin Campos adicionales que tiene este tipo (etiqueta física, fechas)
+  const [pluginFields, setPluginFields] = useState<PluginFieldKey[]>([]);
+  // Pestañas en edición: datos editables, hardware (computadoras) y red (solo lectura)
+  const [tab, setTab] = useState<'data' | 'hardware' | 'network'>('data');
   const [dropdowns, setDropdowns] = useState<Dropdowns>(emptyDropdowns);
   const [loadingAsset, setLoadingAsset] = useState<boolean>(assetId !== null);
   const [loadingDropdowns, setLoadingDropdowns] = useState<boolean>(true);
@@ -46,9 +50,9 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
   useEffect(() => {
     let cancelled = false;
 
-    AssetService.supportsPhysicalTag(session, itemtype)
-      .then(v => { if (!cancelled) setHasPhysicalTag(v); })
-      .catch(() => { /* sin etiqueta */ });
+    AssetService.getPluginFieldOptions(session, itemtype)
+      .then(options => { if (!cancelled) setPluginFields(Object.keys(options) as PluginFieldKey[]); })
+      .catch(() => { /* sin campos del plugin */ });
 
     if (assetId !== null) {
       AssetService.getAsset(session, itemtype, assetId)
@@ -100,12 +104,12 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
     setError(null);
     try {
       if (isNew) {
-        const id = await AssetService.createAsset(session, itemtype, form, hasPhysicalTag);
+        const id = await AssetService.createAsset(session, itemtype, form, pluginFields);
         setCurrentId(id);
         setSavedMsg(`${config.singular} creado en GLPI (#${id}).`);
         onSaved(id);
       } else {
-        await AssetService.updateAsset(session, itemtype, currentId, form, hasPhysicalTag);
+        await AssetService.updateAsset(session, itemtype, currentId, form, pluginFields);
         setSavedMsg('Cambios guardados en GLPI.');
         onSaved(currentId);
       }
@@ -131,6 +135,22 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
           autoCapitalize={key === 'name' ? 'sentences' : 'characters'}
           autoCorrect="off"
           spellCheck={false}
+        />
+      </div>
+    </div>
+  );
+
+  const dateField = (key: 'acquisitionDate' | 'retirementDate', label: string, icon: React.ReactNode) => (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <div className="input-wrapper">
+        <span className="input-icon" style={{ display: 'flex' }}>{icon}</span>
+        <input
+          type="date"
+          className="form-input"
+          value={form[key]}
+          onChange={e => set(key, e.target.value)}
+          disabled={saving}
         />
       </div>
     </div>
@@ -170,7 +190,39 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
         {isNew ? `Nuevo: ${config.singular}` : form.name || config.singular}
       </h2>
 
-      {loadingAsset ? (
+      {/* Pestañas (solo al editar un activo existente) */}
+      {!isNew && (
+        <div style={{ display: 'flex', gap: '4px', padding: '4px', marginBottom: '14px', background: 'var(--bg-main)', border: '1px solid var(--border-color)', borderRadius: '14px' }}>
+          {([
+            ['data', 'Datos'],
+            ...(itemtype === 'Computer' ? [['hardware', 'Hardware']] : []),
+            ['network', 'Red']
+          ] as ['data' | 'hardware' | 'network', string][]).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              style={{
+                flex: 1, padding: '8px 4px', border: 'none', borderRadius: '10px', cursor: 'pointer',
+                background: tab === key ? 'var(--card-bg)' : 'transparent',
+                boxShadow: tab === key ? 'var(--shadow-sm)' : 'none',
+                color: tab === key ? 'var(--primary)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.8rem'
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!isNew && tab === 'hardware' && currentId !== null && (
+        <AssetHardwareSection session={session} itemtype={itemtype} assetId={currentId} />
+      )}
+      {!isNew && tab === 'network' && currentId !== null && (
+        <AssetNetworkSection session={session} itemtype={itemtype} assetId={currentId} />
+      )}
+
+      {(isNew || tab === 'data') && (loadingAsset ? (
         <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
           <RefreshCw className="spin" size={24} style={{ marginBottom: '8px' }} />
           <div style={{ fontSize: '0.85rem' }}>Cargando activo de GLPI...</div>
@@ -180,11 +232,19 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
           <div className="card">
             <div style={sectionTitle}>Identificación</div>
             {textField('name', 'Nombre *', <Tag size={18} />, `Nombre del ${config.singular.toLowerCase()}`)}
-            {hasPhysicalTag && textField('physicalTag', 'Etiqueta física', <Barcode size={18} />, 'PC-000000')}
+            {pluginFields.includes('physicalTag') && textField('physicalTag', 'Etiqueta física', <Barcode size={18} />, 'PC-000000')}
             {textField('serial', 'Número de serie', <Hash size={18} />)}
             {textField('otherserial', 'Número de inventario', <Hash size={18} />)}
             {textField('uuid', 'UUID', <Fingerprint size={18} />)}
           </div>
+
+          {(pluginFields.includes('acquisitionDate') || pluginFields.includes('retirementDate')) && (
+            <div className="card">
+              <div style={sectionTitle}>Fechas</div>
+              {pluginFields.includes('acquisitionDate') && dateField('acquisitionDate', 'Fecha de adquisición', <CalendarPlus size={18} />)}
+              {pluginFields.includes('retirementDate') && dateField('retirementDate', 'Fecha de baja', <CalendarX size={18} />)}
+            </div>
+          )}
 
           <div className="card">
             <div style={sectionTitle}>Clasificación</div>
@@ -232,7 +292,7 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
             {isNew ? `Crear ${config.singular.toLowerCase()}` : 'Guardar cambios'}
           </button>
         </>
-      )}
+      ))}
     </div>
   );
 };
