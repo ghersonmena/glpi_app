@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import type { GLPISession } from '../types/glpi';
 import { AssetService, ASSET_TYPES, getAssetType } from '../services/assetService';
-import type { AssetSummary } from '../services/assetService';
+import type { AssetSummary, SavedFilter } from '../services/assetService';
 import { AssetFormView } from './AssetFormView';
-import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package } from 'lucide-react';
+import { SavedFiltersModal } from './SavedFiltersModal';
+import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
@@ -36,14 +37,54 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   // Cambiar este número vuelve a consultar el listado (botón actualizar, regreso del formulario)
   const [reloadKey, setReloadKey] = useState<number>(0);
 
+  // Búsquedas guardadas de GLPI por tipo y filtro activo por tipo.
+  // activeFilters[tipo] === undefined → aún no se decide (se aplica la predeterminada ⭐ al cargar)
+  const [filtersByType, setFiltersByType] = useState<Record<string, SavedFilter[]>>({});
+  const [filtersError, setFiltersError] = useState<string | null>(null);
+  const [activeFilters, setActiveFilters] = useState<Record<string, SavedFilter | null>>({});
+  const [filtersOpen, setFiltersOpen] = useState<boolean>(false);
+
+  const filtersLoaded = filtersByType[itemtype] !== undefined;
+  const filterDecided = itemtype in activeFilters;
+  const activeFilter = activeFilters[itemtype] ?? null;
+
+  // 1) Cargar las búsquedas guardadas del tipo y, la primera vez, aplicar la predeterminada (como GLPI)
   useEffect(() => {
+    if (filtersLoaded) return;
     let cancelled = false;
-    AssetService.listAssets(session, itemtype)
+    AssetService.getSavedFilters(session, itemtype)
+      .then(list => {
+        if (cancelled) return;
+        setFiltersError(null);
+        setFiltersByType(prev => ({ ...prev, [itemtype]: list }));
+        setActiveFilters(prev => (itemtype in prev ? prev : { ...prev, [itemtype]: list.find(f => f.isDefault) || null }));
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setFiltersError(err.message || 'No se pudieron cargar las búsquedas guardadas.');
+        setFiltersByType(prev => ({ ...prev, [itemtype]: [] }));
+        setActiveFilters(prev => (itemtype in prev ? prev : { ...prev, [itemtype]: null }));
+      });
+    return () => { cancelled = true; };
+  }, [session, itemtype, filtersLoaded]);
+
+  // 2) Cargar los activos cuando ya se sabe qué filtro aplicar (evita cargar todo y luego filtrar)
+  useEffect(() => {
+    if (!filterDecided) return;
+    let cancelled = false;
+    AssetService.listAssets(session, itemtype, activeFilter)
       .then(list => { if (!cancelled) { setAssets(list); setError(null); } })
       .catch(err => { if (!cancelled) { setError(err.message || 'No se pudieron cargar los activos.'); setAssets([]); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [session, itemtype, reloadKey]);
+  }, [session, itemtype, filterDecided, activeFilter, reloadKey]);
+
+  const applyFilter = (filter: SavedFilter | null) => {
+    setFiltersOpen(false);
+    if ((filter?.id ?? null) === (activeFilter?.id ?? null)) return;
+    setLoading(true);
+    setActiveFilters(prev => ({ ...prev, [itemtype]: filter }));
+  };
 
   const load = () => {
     setLoading(true);
@@ -133,7 +174,60 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
         >
           <RefreshCw size={16} className={loading ? 'spin' : ''} />
         </button>
+        <button
+          type="button"
+          onClick={() => setFiltersOpen(true)}
+          aria-label="Búsquedas guardadas"
+          title="Búsquedas guardadas de GLPI"
+          style={{
+            position: 'relative', padding: '0 12px', borderRadius: 'var(--radius-md)',
+            border: `1px solid ${activeFilter ? 'var(--primary)' : 'var(--border-color)'}`,
+            background: activeFilter ? 'rgba(59, 130, 246, 0.12)' : 'var(--card-bg)',
+            color: activeFilter ? 'var(--primary)' : 'var(--text-main)', cursor: 'pointer'
+          }}
+        >
+          <ListFilter size={16} />
+        </button>
       </div>
+
+      {/* Filtro (búsqueda guardada) activo, con opción de quitarlo */}
+      {activeFilter && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', padding: '7px 8px 7px 12px',
+            borderRadius: '999px', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.35)',
+            color: 'var(--primary)', fontSize: '0.75rem', fontWeight: 700
+          }}
+        >
+          <ListFilter size={13} style={{ flexShrink: 0 }} />
+          {activeFilter.isDefault && <Star size={12} color="#f59e0b" fill="#f59e0b" style={{ flexShrink: 0 }} />}
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeFilter.name}
+          </span>
+          <button
+            type="button"
+            onClick={() => applyFilter(null)}
+            aria-label="Quitar filtro"
+            style={{ display: 'flex', padding: '3px', border: 'none', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', cursor: 'pointer' }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {filtersOpen && (
+        <SavedFiltersModal
+          session={session}
+          itemtype={itemtype}
+          typeLabel={config.label}
+          filters={filtersByType[itemtype] || []}
+          loading={!filtersLoaded}
+          error={filtersError}
+          activeId={activeFilter?.id ?? null}
+          onSelect={applyFilter}
+          onClose={() => setFiltersOpen(false)}
+        />
+      )}
 
       <button
         type="button"
@@ -153,7 +247,7 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
         <div className="card" style={{ color: '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{error}</div>
       ) : filtered.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-          {query ? 'Sin coincidencias.' : `No hay ${config.label.toLowerCase()} registrados.`}
+          {query ? 'Sin coincidencias.' : activeFilter ? `Ningún activo cumple “${activeFilter.name}”.` : `No hay ${config.label.toLowerCase()} registrados.`}
         </div>
       ) : (
         <>

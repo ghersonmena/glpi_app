@@ -1,5 +1,6 @@
 import type { GLPISession } from '../types/glpi';
 import { GLPIService, PHYSICAL_TAG_FIELD } from './glpiService';
+import { savedQueryToSearchParams } from './savedSearchQuery';
 
 // Tipos de activo que maneja el módulo de Activos y los campos propios de cada uno en GLPI
 export interface AssetTypeConfig {
@@ -57,6 +58,15 @@ export const emptyAssetForm = (): AssetForm => ({
   users_id: 0, serial: '', otherserial: '', uuid: '', physicalTag: '', comment: ''
 });
 
+// Búsqueda guardada de GLPI ("filtro") para un tipo de activo
+export interface SavedFilter {
+  id: number;
+  name: string;
+  query: string;       // consulta tal como la guarda GLPI
+  isPrivate: boolean;  // solo visible para quien la creó
+  isDefault: boolean;  // la predeterminada (⭐) del usuario para este tipo
+}
+
 export interface DropdownOption {
   id: number;
   label: string;
@@ -93,6 +103,11 @@ const MOCK_DROPDOWNS: Record<string, DropdownOption[]> = {
   Manufacturer: [{ id: 1, label: 'Dell' }, { id: 2, label: 'HP' }, { id: 3, label: 'Lenovo' }]
 };
 
+const MOCK_FILTERS: (SavedFilter & { itemtype: string })[] = [
+  { id: 1, itemtype: 'Computer', name: 'EQUIPOS EN USO', query: 'criteria[0][field]=31&criteria[0][searchtype]=equals&criteria[0][value]=1', isPrivate: false, isDefault: true },
+  { id: 2, itemtype: 'Computer', name: 'EQUIPOS EN ALMACÉN', query: 'criteria[0][field]=31&criteria[0][searchtype]=equals&criteria[0][value]=2', isPrivate: true, isDefault: false }
+];
+
 export class AssetService {
   private static dropdownCache = new Map<string, Promise<DropdownOption[]>>();
 
@@ -102,11 +117,54 @@ export class AssetService {
     return (await GLPIService.getPhysicalTagOption(session, itemtype).catch(() => null)) !== null;
   }
 
-  /** Todos los activos de un tipo (excluye papelera y plantillas), ordenados por nombre. */
-  static async listAssets(session: GLPISession, itemtype: string): Promise<AssetSummary[]> {
+  /**
+   * Búsquedas guardadas de GLPI para un tipo de activo. GLPI devuelve las del usuario de la
+   * sesión (incluidas sus privadas) más las públicas de otros, así que cada usuario ve las suyas.
+   */
+  static async getSavedFilters(session: GLPISession, itemtype: string): Promise<SavedFilter[]> {
+    if (session.isMock) return MOCK_FILTERS.filter(f => f.itemtype === itemtype);
+
+    const [searches, defaults] = await Promise.all([
+      GLPIService.fetchAllPages(session, 'SavedSearch'),
+      // Predeterminada por usuario y tipo (la ⭐ en GLPI); si falla, simplemente no hay ⭐
+      GLPIService.fetchAllPages(session, 'SavedSearch_User').catch(() => [])
+    ]);
+    const defaultIds = new Set(
+      defaults
+        .filter((d: any) => d.itemtype === itemtype && Number(d.users_id) === Number(session.userId))
+        .map((d: any) => Number(d.savedsearches_id))
+    );
+    return searches
+      .filter((s: any) => s.itemtype === itemtype && Number(s.type) === 1) // type 1 = búsqueda
+      .map((s: any) => ({
+        id: Number(s.id),
+        name: String(s.name || `Búsqueda #${s.id}`),
+        query: String(s.query || ''),
+        isPrivate: Number(s.is_private) === 1,
+        isDefault: defaultIds.has(Number(s.id))
+      }))
+      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name, 'es'));
+  }
+
+  /** Cuántos activos devuelve una búsqueda guardada (el número que GLPI muestra junto a cada una). */
+  static async countSavedFilter(session: GLPISession, itemtype: string, filter: SavedFilter): Promise<number> {
+    if (session.isMock) return (await this.listAssets(session, itemtype, filter)).length;
+    const params = savedQueryToSearchParams(filter.query);
+    params.set('range', '0-0');
+    params.append('forcedisplay[0]', SO.id);
+    const res = await fetch(`${session.baseUrl}/apirest.php/search/${itemtype}?${params}`, { headers: authHeaders(session) });
+    if (!res.ok) throw new Error(`La búsqueda "${filter.name}" no se pudo ejecutar (${res.status})${await readError(res)}`);
+    return Number((await res.json())?.totalcount) || 0;
+  }
+
+  /**
+   * Activos de un tipo (excluye papelera y plantillas), ordenados por nombre. Con `filter`, solo
+   * los que cumplen esa búsqueda guardada de GLPI.
+   */
+  static async listAssets(session: GLPISession, itemtype: string, filter?: SavedFilter | null): Promise<AssetSummary[]> {
     if (session.isMock) {
       const locations = MOCK_DROPDOWNS.Location;
-      return (MOCK_ASSETS[itemtype] || []).map(a => ({
+      return (MOCK_ASSETS[itemtype] || []).filter(a => !filter || a.states_id === Number(new URLSearchParams(filter.query).get('criteria[0][value]'))).map(a => ({
         id: a.id, name: a.name, serial: a.serial, inventoryNumber: a.otherserial, physicalTag: a.physicalTag,
         location: locations.find(l => l.id === a.locations_id)?.label,
         state: MOCK_DROPDOWNS.State.find(s => s.id === a.states_id)?.label
@@ -119,11 +177,19 @@ export class AssetService {
     const pageSize = 50; // GLPI recorta cada respuesta a list_limit_max (50 por defecto)
 
     for (let start = 0; start < 20000; start += pageSize) {
-      const params = new URLSearchParams({ sort: SO.name, order: 'ASC', range: `${start}-${start + pageSize - 1}` });
+      // Criterios de la búsqueda guardada (si hay) + columnas, orden y página de la app
+      const params = filter ? savedQueryToSearchParams(filter.query) : new URLSearchParams();
+      params.set('sort', SO.name);
+      params.set('order', 'ASC');
+      params.set('range', `${start}-${start + pageSize - 1}`);
       display.forEach((opt, i) => params.set(`forcedisplay[${i}]`, opt));
       const res = await fetch(`${session.baseUrl}/apirest.php/search/${itemtype}?${params}`, { headers: authHeaders(session) });
       if (!res.ok) {
-        if (start === 0) throw new Error(`No se pudieron cargar los activos (${res.status})${await readError(res)}`);
+        if (start === 0) {
+          throw new Error(filter
+            ? `La búsqueda "${filter.name}" no se pudo ejecutar (${res.status})${await readError(res)}`
+            : `No se pudieron cargar los activos (${res.status})${await readError(res)}`);
+        }
         break;
       }
       const body = await res.json();
