@@ -401,3 +401,15 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .slide-in-next, .slide-in-prev, .modal-pop { animation: none; }
 }
+
+/* Línea del escáner de códigos de barras que recorre el recuadro guía */
+@keyframes scanLine {
+  0%   { top: 8%; }
+  50%  { top: 90%; }
+  100% { top: 8%; }
+}
+.scan-line { animation: scanLine 2.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-line { animation: none; top: 50%; }
+}

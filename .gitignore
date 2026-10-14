@@ -35,3 +35,6 @@ all_tasks.json
 # Certificados SSL (solo en el servidor, se montan como volumen)
 certs/*
 !certs/README.md
+
+# Archivos del OCR copiados desde node_modules (scripts/copy-ocr-assets.mjs)
+public/ocr/

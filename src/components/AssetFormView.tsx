@@ -4,7 +4,8 @@ import { AssetService, getAssetType, emptyAssetForm } from '../services/assetSer
 import type { AssetForm, DropdownOption, PluginFieldKey } from '../services/assetService';
 import { SearchSelect } from './SearchSelect';
 import { AssetHardwareSection, AssetNetworkSection } from './AssetInfoSections';
-import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX } from 'lucide-react';
+import { ScannerModal } from './ScannerModal';
+import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine } from 'lucide-react';
 
 interface AssetFormViewProps {
   session: GLPISession;
@@ -13,6 +14,10 @@ interface AssetFormViewProps {
   onBack: () => void;
   onSaved: (id: number) => void;
 }
+
+// Campos que se pueden llenar escaneando una etiqueta
+type ScannableField = 'physicalTag' | 'serial' | 'otherserial' | 'uuid';
+const SCANNABLE: ScannableField[] = ['physicalTag', 'serial', 'otherserial', 'uuid'];
 
 interface Dropdowns {
   states: DropdownOption[];
@@ -40,6 +45,8 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
   const [pluginFields, setPluginFields] = useState<PluginFieldKey[]>([]);
   // Pestañas en edición: datos editables, hardware (computadoras) y red (solo lectura)
   const [tab, setTab] = useState<'data' | 'hardware' | 'network'>('data');
+  // Campo que se está escaneando con la cámara (código de barras u OCR)
+  const [scanning, setScanning] = useState<{ key: ScannableField; label: string } | null>(null);
   const [dropdowns, setDropdowns] = useState<Dropdowns>(emptyDropdowns);
   const [loadingAsset, setLoadingAsset] = useState<boolean>(assetId !== null);
   const [loadingDropdowns, setLoadingDropdowns] = useState<boolean>(true);
@@ -135,7 +142,24 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
           autoCapitalize={key === 'name' ? 'sentences' : 'characters'}
           autoCorrect="off"
           spellCheck={false}
+          style={SCANNABLE.includes(key as ScannableField) ? { paddingRight: '48px' } : undefined}
         />
+        {SCANNABLE.includes(key as ScannableField) && (
+          <button
+            type="button"
+            onClick={() => setScanning({ key: key as ScannableField, label })}
+            disabled={saving}
+            aria-label={`Escanear ${label}`}
+            title="Escanear código de barras o texto"
+            style={{
+              position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)',
+              display: 'flex', padding: '7px', borderRadius: '10px', border: 'none',
+              background: 'rgba(59, 130, 246, 0.12)', color: 'var(--primary)', cursor: 'pointer'
+            }}
+          >
+            <ScanLine size={18} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -189,6 +213,15 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
       <h2 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>
         {isNew ? `Nuevo: ${config.singular}` : form.name || config.singular}
       </h2>
+
+      {scanning && (
+        <ScannerModal
+          fieldLabel={scanning.label}
+          kind={scanning.key === 'uuid' ? 'uuid' : 'alphanumeric'}
+          onResult={value => set(scanning.key, value)}
+          onClose={() => setScanning(null)}
+        />
+      )}
 
       {/* Pestañas (solo al editar un activo existente) */}
       {!isNew && (
