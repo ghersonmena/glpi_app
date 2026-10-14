@@ -4,7 +4,7 @@ import { AssetService, ASSET_TYPES, getAssetType } from '../services/assetServic
 import type { AssetSummary, SavedFilter } from '../services/assetService';
 import { AssetFormView } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
-import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star } from 'lucide-react';
+import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
@@ -106,10 +106,15 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
     );
   }
 
-  // Busca en nombre, etiqueta, serie, inventario y ubicación
-  const query = normalize(search.trim());
-  const filtered = query
-    ? assets.filter(a => normalize([a.name, a.physicalTag, a.serial, a.inventoryNumber, a.location].filter(Boolean).join(' ')).includes(query))
+  // Busca en nombre, etiqueta, serie, inventario, ubicación y usuario asignado. Cada palabra
+  // debe aparecer en algún campo, en cualquier orden ("gherson pc" encuentra GhersonMenaPC)
+  const words = normalize(search.trim()).split(/\s+/).filter(Boolean);
+  const query = words.join(' ');
+  const filtered = words.length
+    ? assets.filter(a => {
+        const haystack = normalize([a.name, a.physicalTag, a.serial, a.inventoryNumber, a.location, a.userName].filter(Boolean).join(' '));
+        return words.every(word => haystack.includes(word));
+      })
     : assets;
 
   return (
@@ -159,7 +164,7 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
             className="form-input"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Nombre, etiqueta, serie, inventario..."
+            placeholder="Nombre, etiqueta, serie, inventario, usuario..."
           />
         </div>
         <button
@@ -273,6 +278,7 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: '6px', fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>
                 {asset.physicalTag && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#8b5cf6' }}><Barcode size={12} /> {asset.physicalTag}</span>}
+                {asset.userName && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--text-main)' }}><User size={12} /> {asset.userName}</span>}
                 {asset.serial && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Hash size={12} /> {asset.serial}</span>}
                 {asset.location && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><MapPin size={12} /> {shortLocation(asset.location)}</span>}
               </div>

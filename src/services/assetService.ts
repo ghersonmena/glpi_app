@@ -35,6 +35,7 @@ export interface AssetSummary {
   physicalTag?: string;
   location?: string;
   state?: string;
+  userName?: string; // usuario asignado: nombre completo (o login si no tiene nombre capturado)
 }
 
 // Campos del plugin Campos adicionales (bloque "Etiqueta"). Solo se muestran y guardan en los
@@ -109,7 +110,7 @@ export interface DropdownOption {
 }
 
 // Opciones de búsqueda estándar de GLPI para activos
-const SO = { name: '1', id: '2', location: '3', serial: '5', inventory: '6', state: '31' };
+const SO = { name: '1', id: '2', location: '3', serial: '5', inventory: '6', state: '31', user: '70' };
 
 const authHeaders = (session: GLPISession) => ({
   'Content-Type': 'application/json',
@@ -238,12 +239,21 @@ export class AssetService {
       return (MOCK_ASSETS[itemtype] || []).filter(a => !filter || a.states_id === Number(new URLSearchParams(filter.query).get('criteria[0][value]'))).map(a => ({
         id: a.id, name: a.name, serial: a.serial, inventoryNumber: a.otherserial, physicalTag: a.physicalTag,
         location: locations.find(l => l.id === a.locations_id)?.label,
-        state: MOCK_DROPDOWNS.State.find(s => s.id === a.states_id)?.label
+        state: MOCK_DROPDOWNS.State.find(s => s.id === a.states_id)?.label,
+        userName: a.users_id === 2 ? 'Juan Pérez' : undefined
       }));
     }
 
-    const tagOption = await GLPIService.getPhysicalTagOption(session, itemtype).catch(() => null);
-    const display = [SO.name, SO.id, SO.location, SO.serial, SO.inventory, SO.state, ...(tagOption ? [tagOption] : [])];
+    // El buscador da el login del usuario (opción 70); se traduce a nombre completo con el
+    // directorio de usuarios. Si el directorio falla, se muestra el login.
+    const [tagOption, users] = await Promise.all([
+      GLPIService.getPhysicalTagOption(session, itemtype).catch(() => null),
+      this.getAllUsers(session).catch(() => [] as any[])
+    ]);
+    const fullNameByLogin = new Map<string, string>(
+      users.map((u: any) => [String(u.name || '').toLowerCase(), GLPIService.userDisplayName(u)])
+    );
+    const display = [SO.name, SO.id, SO.location, SO.serial, SO.inventory, SO.state, SO.user, ...(tagOption ? [tagOption] : [])];
     const result: AssetSummary[] = [];
     const pageSize = 50; // GLPI recorta cada respuesta a list_limit_max (50 por defecto)
 
@@ -272,7 +282,10 @@ export class AssetService {
         inventoryNumber: row[SO.inventory] || undefined,
         physicalTag: tagOption ? row[tagOption] || undefined : undefined,
         location: row[SO.location] || undefined,
-        state: row[SO.state] || undefined
+        state: row[SO.state] || undefined,
+        userName: row[SO.user]
+          ? fullNameByLogin.get(String(row[SO.user]).toLowerCase()) || String(row[SO.user])
+          : undefined
       }));
       const total = Number(body?.totalcount) || 0;
       if (rows.length === 0 || result.length >= total) break;
@@ -513,6 +526,20 @@ export class AssetService {
     return this.dropdownCache.get(key)!;
   }
 
+  private static usersCache = new Map<string, Promise<any[]>>();
+
+  /** Usuarios no borrados de GLPI (activos e inactivos), descargados una vez por sesión. */
+  private static getAllUsers(session: GLPISession): Promise<any[]> {
+    const key = session.sessionToken;
+    if (!this.usersCache.has(key)) {
+      const promise = GLPIService.fetchAllPages(session, 'User')
+        .then(rows => rows.filter((u: any) => !Number(u.is_deleted)));
+      promise.catch(() => this.usersCache.delete(key));
+      this.usersCache.set(key, promise);
+    }
+    return this.usersCache.get(key)!;
+  }
+
   /**
    * Usuarios para el campo "Usuario" del activo: TODOS los no borrados, no solo los activos.
    * En GLPI la mayoría de quienes tienen un equipo asignado son cuentas inactivas (no inician
@@ -523,9 +550,8 @@ export class AssetService {
 
     const key = `${session.sessionToken}#User`;
     if (!this.dropdownCache.has(key)) {
-      const promise = GLPIService.fetchAllPages(session, 'User').then(rows =>
+      const promise = this.getAllUsers(session).then(rows =>
         rows
-          .filter((u: any) => !Number(u.is_deleted))
           .map((u: any) => ({
             id: Number(u.id),
             label: `${GLPIService.userDisplayName(u)}${Number(u.is_active) === 1 ? '' : ' (inactivo)'}`
