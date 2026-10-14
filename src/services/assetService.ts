@@ -148,12 +148,15 @@ const readError = async (res: Response): Promise<string> => {
 let mockSeq = 1000;
 const MOCK_ASSETS: Record<string, (AssetForm & { id: number })[]> = {
   Computer: [
-    { ...emptyAssetForm(), id: 89, name: 'GhersonMenaPC', serial: 'MXL1234ABC', otherserial: 'INV-0103', physicalTag: 'PC-000103', locations_id: 1, states_id: 1, users_id: 2 }
+    { ...emptyAssetForm(), id: 89, name: 'GhersonMenaPC', serial: 'MXL1234ABC', otherserial: 'INV-0103', physicalTag: 'PC-000103', locations_id: 2, states_id: 1, users_id: 2 }
   ],
   Monitor: [{ ...emptyAssetForm(), id: 12, name: 'MON-SIS-01', serial: 'CN0ABC123', locations_id: 1, states_id: 1 }]
 };
 const MOCK_DROPDOWNS: Record<string, DropdownOption[]> = {
-  Location: [{ id: 1, label: 'Oficinas ACERO > Planta Baja > Sistemas > 8 Posicion' }],
+  Location: [
+    { id: 1, label: 'Oficinas ACERO > Planta Baja > Sistemas > 8 Posicion' },
+    { id: 2, label: 'Oficinas ACERO > Planta Alta > Ejecutivas de Cuenta > Hilera 3 > 4 Posicion' }
+  ],
   State: [{ id: 1, label: 'En uso' }, { id: 2, label: 'En almacén' }],
   Manufacturer: [{ id: 1, label: 'Dell' }, { id: 2, label: 'HP' }, { id: 3, label: 'Lenovo' }]
 };

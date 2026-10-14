@@ -16,6 +16,25 @@ interface SearchSelectProps {
   onChange: (id: number) => void;
 }
 
+// Etiquetas jerárquicas de GLPI ("Oficinas ACERO > Planta Alta > ... > 4 Posicion"): el camino
+// va en una línea pequeña y el último nivel (el lugar exacto) en negritas debajo. Así se lee la
+// ruta completa aunque sea larga, sin cortarla con "…".
+const HierarchicalLabel: React.FC<{ label: string; color: string; strong?: boolean }> = ({ label, color, strong }) => {
+  const parts = label.split('>').map(p => p.trim()).filter(Boolean);
+  if (parts.length <= 1) {
+    return <span style={{ color, fontWeight: strong ? 700 : 500, wordBreak: 'break-word' }}>{label}</span>;
+  }
+  const last = parts.pop();
+  return (
+    <span style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.35, wordBreak: 'break-word' }}>
+        {parts.join(' › ')}
+      </span>
+      <span style={{ fontSize: '0.95em', fontWeight: 800, color, lineHeight: 1.3, wordBreak: 'break-word' }}>{last}</span>
+    </span>
+  );
+};
+
 const normalize = (value: string) =>
   value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -43,14 +62,15 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({ label, value, option
         className="form-input"
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-          textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer', paddingLeft: '12px'
+          textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer', paddingLeft: '12px',
+          // El texto puede ocupar varias líneas: valores largos (ubicaciones) se leen completos
+          paddingTop: '10px', paddingBottom: '10px', minHeight: '52px', height: 'auto'
         }}
       >
-        <span style={{
-          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: selected ? 'var(--text-main)' : 'var(--text-muted)'
-        }}>
-          {selected ? selected.label : value ? `#${value}` : 'Sin asignar'}
+        <span style={{ flex: 1, minWidth: 0, whiteSpace: 'normal' }}>
+          {selected
+            ? <HierarchicalLabel label={selected.label} color="var(--text-main)" />
+            : <span style={{ color: 'var(--text-muted)' }}>{value ? `#${value}` : 'Sin asignar'}</span>}
         </span>
         {loading ? <RefreshCw size={14} className="spin" /> : <ChevronDown size={16} color="var(--text-muted)" />}
       </button>
@@ -117,12 +137,10 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({ label, value, option
                         background: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
                       }}
                     >
-                      <span style={{
-                        flex: 1, fontSize: '0.84rem', fontWeight: option.id === 0 ? 600 : 700,
-                        fontStyle: option.id === 0 ? 'italic' : 'normal',
-                        color: isSelected ? 'var(--primary)' : option.id === 0 ? 'var(--text-muted)' : 'var(--text-main)'
-                      }}>
-                        {option.label}
+                      <span style={{ flex: 1, minWidth: 0, fontSize: '0.84rem' }}>
+                        {option.id === 0
+                          ? <span style={{ fontWeight: 600, fontStyle: 'italic', color: isSelected ? 'var(--primary)' : 'var(--text-muted)' }}>{option.label}</span>
+                          : <HierarchicalLabel label={option.label} color={isSelected ? 'var(--primary)' : 'var(--text-main)'} strong />}
                       </span>
                       {isSelected && <Check size={16} color="var(--primary)" />}
                     </button>
