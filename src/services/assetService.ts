@@ -99,6 +99,20 @@ export interface NetworkPortInfo {
 // Interfaces que no son tarjetas de red físicas
 const VIRTUAL_PORT = /^(lo|loopback|docker\d*|br-|virbr|veth|vmnet|vboxnet|tun|tap|wg|zt|tailscale|cni|flannel|kube)/i;
 
+// Tipos que se conectan a una computadora (pestaña "Conexiones" de GLPI, tabla Computer_Item).
+// Los equipos de red no: se enlazan por puertos de red.
+export const CONNECTABLE_TYPES = ['Monitor', 'Peripheral', 'Phone', 'Printer'];
+
+// Conexión computadora ↔ dispositivo
+export interface AssetConnection {
+  linkId: number;     // id del registro Computer_Item (para desconectar)
+  itemtype: string;   // tipo del dispositivo (Monitor, Peripheral...)
+  itemId: number;
+  computerId: number;
+  name: string;       // nombre del otro extremo (dispositivo o computadora, según desde dónde se mire)
+  detail?: string;    // etiqueta / serie / usuario, para reconocerlo
+}
+
 // Búsqueda guardada de GLPI ("filtro") para un tipo de activo
 export interface SavedFilter {
   id: number;
@@ -154,6 +168,10 @@ const MOCK_TECH: AssetTechInfo = {
 const MOCK_NETWORK: NetworkPortInfo[] = [
   { id: 1, name: 'Ethernet', mac: '74:56:3c:9a:8d:c4', ips: [{ address: '10.11.21.59', version: 4, useful: true }], virtual: false },
   { id: 2, name: 'Loopback', ips: [{ address: '127.0.0.1', version: 4, useful: false }], virtual: true }
+];
+
+const MOCK_CONNECTIONS: { linkId: number; itemtype: string; itemId: number; computerId: number }[] = [
+  { linkId: 1, itemtype: 'Monitor', itemId: 12, computerId: 89 }
 ];
 
 const MOCK_FILTERS: (SavedFilter & { itemtype: string })[] = [
@@ -505,6 +523,90 @@ export class AssetService {
     // Primero las tarjetas físicas con IPs útiles; al final las virtuales y las que no tienen IP
     const rank = (p: NetworkPortInfo) => (p.virtual ? 2 : 0) + (p.ips.some(ip => ip.useful) ? 0 : 1);
     return result.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  }
+
+  // ── Conexiones (Computer_Item) ─────────────────────────────────────────────
+
+  private static describe(asset?: AssetSummary): string | undefined {
+    if (!asset) return undefined;
+    return [asset.physicalTag, asset.serial && `S/N ${asset.serial}`, asset.userName].filter(Boolean).join(' · ') || undefined;
+  }
+
+  /** Todas las conexiones del sistema (son pocas: se descargan completas de una vez). */
+  static async getAllConnections(session: GLPISession): Promise<{ linkId: number; itemtype: string; itemId: number; computerId: number }[]> {
+    if (session.isMock) return MOCK_CONNECTIONS.map(c => ({ ...c }));
+    const rows = await GLPIService.fetchAllPages(session, 'Computer_Item');
+    return rows
+      .filter((r: any) => !Number(r.is_deleted))
+      .map((r: any) => ({ linkId: Number(r.id), itemtype: String(r.itemtype), itemId: Number(r.items_id), computerId: Number(r.computers_id) }));
+  }
+
+  /** Dispositivos conectados a una computadora, con nombre y datos para reconocerlos. */
+  static async getComputerConnections(session: GLPISession, computerId: number): Promise<AssetConnection[]> {
+    const links = (await this.getAllConnections(session)).filter(c => c.computerId === computerId);
+    const types = [...new Set(links.map(l => l.itemtype))];
+    const listsByType = new Map<string, AssetSummary[]>();
+    await Promise.all(types.map(async t => {
+      listsByType.set(t, await this.listAssets(session, t).catch(() => [] as AssetSummary[]));
+    }));
+    return links.map(link => {
+      const asset = listsByType.get(link.itemtype)?.find(a => a.id === link.itemId);
+      return { ...link, name: asset?.name || `${getAssetType(link.itemtype).singular} #${link.itemId}`, detail: this.describe(asset) };
+    });
+  }
+
+  /** Computadora(s) a la(s) que está conectado un dispositivo. */
+  static async getItemConnections(session: GLPISession, itemtype: string, itemId: number): Promise<AssetConnection[]> {
+    const links = (await this.getAllConnections(session)).filter(c => c.itemtype === itemtype && c.itemId === itemId);
+    if (links.length === 0) return [];
+    const computers = await this.listAssets(session, 'Computer').catch(() => [] as AssetSummary[]);
+    return links.map(link => {
+      const computer = computers.find(c => c.id === link.computerId);
+      return { ...link, name: computer?.name || `Computadora #${link.computerId}`, detail: this.describe(computer) };
+    });
+  }
+
+  /** Conecta un dispositivo a una computadora. */
+  static async connect(session: GLPISession, computerId: number, itemtype: string, itemId: number): Promise<void> {
+    if (session.isMock) {
+      MOCK_CONNECTIONS.push({ linkId: Date.now(), itemtype, itemId, computerId });
+      return;
+    }
+    const res = await fetch(`${session.baseUrl}/apirest.php/Computer_Item`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ input: { computers_id: computerId, itemtype, items_id: itemId } })
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !Number(body?.id)) {
+      const detail = Array.isArray(body) && body[1] ? `: ${body[1]}` : body?.message ? `: ${body.message}` : '';
+      throw new Error(`No se pudo conectar (${res.status})${detail}`);
+    }
+  }
+
+  /** Quita una conexión (borra el registro Computer_Item). */
+  static async disconnect(session: GLPISession, linkId: number): Promise<void> {
+    if (session.isMock) {
+      const i = MOCK_CONNECTIONS.findIndex(c => c.linkId === linkId);
+      if (i >= 0) MOCK_CONNECTIONS.splice(i, 1);
+      return;
+    }
+    const res = await fetch(`${session.baseUrl}/apirest.php/Computer_Item/${linkId}?force_purge=true`, {
+      method: 'DELETE',
+      headers: authHeaders(session)
+    });
+    if (!res.ok) throw new Error(`No se pudo desconectar (${res.status})${await readError(res)}`);
+  }
+
+  /**
+   * Conecta un dispositivo a una computadora; si ya estaba conectado a otra, primero lo
+   * desconecta de ella (en GLPI un monitor/dispositivo "unitario" solo puede estar en una).
+   */
+  static async moveConnection(session: GLPISession, computerId: number, itemtype: string, itemId: number): Promise<void> {
+    const current = (await this.getAllConnections(session)).filter(c => c.itemtype === itemtype && c.itemId === itemId);
+    if (current.some(c => c.computerId === computerId)) return; // ya está conectado aquí
+    for (const link of current) await this.disconnect(session, link.linkId);
+    await this.connect(session, computerId, itemtype, itemId);
   }
 
   /** Opciones de un desplegable de GLPI (se cachean durante la sesión). */
