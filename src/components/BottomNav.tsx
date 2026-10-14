@@ -1,7 +1,8 @@
 import React from 'react';
-import { Ticket, PlusCircle, BarChart3, Settings, FolderKanban } from 'lucide-react';
+import { Ticket, Package, BarChart3, Settings, FolderKanban } from 'lucide-react';
 
-export type TabType = 'projects' | 'tickets' | 'create' | 'dashboard' | 'settings';
+// 'create' (alta de ticket) ya no tiene pestaña: se abre desde el botón "Nuevo" de Tickets
+export type TabType = 'projects' | 'tickets' | 'create' | 'assets' | 'dashboard' | 'settings';
 
 interface BottomNavProps {
   activeTab: TabType;
@@ -28,11 +29,11 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onChangeTab }) 
       </button>
 
       <button
-        className={`nav-item ${activeTab === 'create' ? 'active' : ''}`}
-        onClick={() => onChangeTab('create')}
+        className={`nav-item ${activeTab === 'assets' ? 'active' : ''}`}
+        onClick={() => onChangeTab('assets')}
       >
-        <PlusCircle size={22} />
-        <span>Nuevo</span>
+        <Package size={22} />
+        <span>Activos</span>
       </button>
 
       <button

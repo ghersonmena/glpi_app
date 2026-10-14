@@ -123,7 +123,7 @@ const TASK_ELEMENTS_ITEMTYPE = 'PluginFieldsProjecttaskelemento';
 const TASK_ELEMENT_TYPE_FIELD = 'itemtype_agregarunelementofield';
 const TASK_ELEMENT_ID_FIELD = 'items_id_agregarunelementofield';
 // Campo "Etiqueta Física" del bloque "Etiqueta" en computadoras (plugin Campos adicionales)
-const PHYSICAL_TAG_FIELD = 'etiquetafisicafield';
+export const PHYSICAL_TAG_FIELD = 'etiquetafisicafield';
 
 export class GLPIService {
   private static cleanUrl(url: string): string {
@@ -788,7 +788,7 @@ export class GLPIService {
    * rango pedido, así que se avanza según lo realmente recibido y se sigue pidiendo
    * hasta obtener una página vacía o un error (400 = rango fuera del total: fin normal).
    */
-  private static async fetchAllPages(session: GLPISession, path: string): Promise<any[]> {
+  static async fetchAllPages(session: GLPISession, path: string): Promise<any[]> {
     const pageSize = 50;
     const items: any[] = [];
     let offset = 0;
@@ -909,7 +909,7 @@ export class GLPIService {
    * GLPI guarda el contenido de las notas como HTML (a veces con las entidades escapadas,
    * p. ej. "&lt;p&gt;"). Se convierte a texto plano sin interpretar el HTML en la página.
    */
-  private static htmlToPlainText(html: string): string {
+  static htmlToPlainText(html: string): string {
     if (!html) return '';
     // DOMParser no ejecuta scripts ni carga recursos: solo se usa para extraer texto
     const textOf = (value: string) =>
@@ -1237,7 +1237,7 @@ export class GLPIService {
     return result;
   }
 
-  private static userDisplayName(item: any): string {
+  static userDisplayName(item: any): string {
     const fullName = [item.firstname, item.realname].filter(Boolean).join(' ').trim();
     return fullName || item.name || `Usuario #${item.id}`;
   }
@@ -1311,7 +1311,7 @@ export class GLPIService {
     if (!res.ok) throw new Error(`No se pudo quitar a ${participant.name} (${res.status})`);
   }
 
-  private static async putItem(session: GLPISession, itemtype: string, id: number, input: Record<string, unknown>, what: string): Promise<void> {
+  static async putItem(session: GLPISession, itemtype: string, id: number, input: Record<string, unknown>, what: string): Promise<void> {
     const res = await fetch(`${session.baseUrl}/apirest.php/${itemtype}/${id}`, {
       method: 'PUT',
       headers: {
@@ -1401,12 +1401,15 @@ export class GLPIService {
 
   private static physicalTagOptionCache = new Map<string, Promise<string | null>>();
 
-  /** Número de opción de búsqueda del campo "Etiqueta Física" (lo asigna el plugin; se busca por nombre de campo). */
-  private static getPhysicalTagOption(session: GLPISession): Promise<string | null> {
-    const key = session.baseUrl;
+  /**
+   * Número de opción de búsqueda del campo "Etiqueta Física" para un tipo de activo (lo asigna
+   * el plugin; se busca por nombre de campo). null si ese tipo no tiene el campo configurado.
+   */
+  static getPhysicalTagOption(session: GLPISession, itemtype = 'Computer'): Promise<string | null> {
+    const key = `${session.baseUrl}#${itemtype}`;
     if (!this.physicalTagOptionCache.has(key)) {
       const promise = (async () => {
-        const res = await fetch(`${session.baseUrl}/apirest.php/listSearchOptions/Computer`, {
+        const res = await fetch(`${session.baseUrl}/apirest.php/listSearchOptions/${itemtype}`, {
           headers: { 'App-Token': session.appToken, 'Session-Token': session.sessionToken }
         });
         if (!res.ok) return null;

@@ -382,3 +382,22 @@ body {
 .modal-pop {
   animation: modalPop 0.18s ease-out;
 }
+
+/* Cambio de módulo: el nuevo entra desde el lado hacia el que se deslizó */
+@keyframes slideInNext {
+  from { opacity: 0.4; transform: translateX(28%); }
+  to   { opacity: 1;   transform: translateX(0); }
+}
+@keyframes slideInPrev {
+  from { opacity: 0.4; transform: translateX(-28%); }
+  to   { opacity: 1;   transform: translateX(0); }
+}
+.slide-in-next { animation: slideInNext 0.22s ease-out; }
+.slide-in-prev { animation: slideInPrev 0.22s ease-out; }
+
+/* El contenido no debe desbordarse a lo ancho mientras se arrastra */
+.app-content { overflow-x: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-in-next, .slide-in-prev, .modal-pop { animation: none; }
+}

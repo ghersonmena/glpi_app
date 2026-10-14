@@ -1,0 +1,238 @@
+import React, { useState, useEffect } from 'react';
+import type { GLPISession } from '../types/glpi';
+import { AssetService, getAssetType, emptyAssetForm } from '../services/assetService';
+import type { AssetForm, DropdownOption } from '../services/assetService';
+import { SearchSelect } from './SearchSelect';
+import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint } from 'lucide-react';
+
+interface AssetFormViewProps {
+  session: GLPISession;
+  itemtype: string;
+  assetId: number | null; // null = alta de un activo nuevo
+  onBack: () => void;
+  onSaved: (id: number) => void;
+}
+
+interface Dropdowns {
+  states: DropdownOption[];
+  types: DropdownOption[];
+  manufacturers: DropdownOption[];
+  models: DropdownOption[];
+  locations: DropdownOption[];
+  users: DropdownOption[];
+}
+
+const emptyDropdowns: Dropdowns = { states: [], types: [], manufacturers: [], models: [], locations: [], users: [] };
+
+const sectionTitle: React.CSSProperties = {
+  fontSize: '0.78rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase',
+  letterSpacing: '0.04em', marginBottom: '12px'
+};
+
+// Alta y edición de un activo (computadora, monitor, teléfono, dispositivo, impresora, equipo de red)
+export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype, assetId, onBack, onSaved }) => {
+  const config = getAssetType(itemtype);
+  const [currentId, setCurrentId] = useState<number | null>(assetId);
+  const [form, setForm] = useState<AssetForm>(emptyAssetForm());
+  const [original, setOriginal] = useState<AssetForm>(emptyAssetForm());
+  const [hasPhysicalTag, setHasPhysicalTag] = useState<boolean>(false);
+  const [dropdowns, setDropdowns] = useState<Dropdowns>(emptyDropdowns);
+  const [loadingAsset, setLoadingAsset] = useState<boolean>(assetId !== null);
+  const [loadingDropdowns, setLoadingDropdowns] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    AssetService.supportsPhysicalTag(session, itemtype)
+      .then(v => { if (!cancelled) setHasPhysicalTag(v); })
+      .catch(() => { /* sin etiqueta */ });
+
+    if (assetId !== null) {
+      AssetService.getAsset(session, itemtype, assetId)
+        .then(data => {
+          if (cancelled) return;
+          setForm(data);
+          setOriginal(data);
+        })
+        .catch(err => { if (!cancelled) setError(err.message || 'No se pudo cargar el activo.'); })
+        .finally(() => { if (!cancelled) setLoadingAsset(false); });
+    }
+
+    Promise.all([
+      AssetService.getDropdown(session, 'State', config.stateVisibility),
+      AssetService.getDropdown(session, config.typeItemtype),
+      AssetService.getDropdown(session, 'Manufacturer'),
+      AssetService.getDropdown(session, config.modelItemtype),
+      AssetService.getDropdown(session, 'Location'),
+      AssetService.getUserOptions(session)
+    ])
+      .then(([states, types, manufacturers, models, locations, users]) => {
+        if (!cancelled) setDropdowns({ states, types, manufacturers, models, locations, users });
+      })
+      .catch(err => { if (!cancelled) setError(err.message || 'No se pudieron cargar las listas de GLPI.'); })
+      .finally(() => { if (!cancelled) setLoadingDropdowns(false); });
+
+    return () => { cancelled = true; };
+  }, [session, itemtype, assetId, config.stateVisibility, config.typeItemtype, config.modelItemtype]);
+
+  const set = <K extends keyof AssetForm>(key: K, value: AssetForm[K]) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+    setSavedMsg(null);
+  };
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(original);
+  const isNew = currentId === null;
+
+  const handleBack = () => {
+    if (dirty && !window.confirm('Tienes cambios sin guardar. ¿Salir sin guardar?')) return;
+    onBack();
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim()) {
+      setError('El nombre es obligatorio.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      if (isNew) {
+        const id = await AssetService.createAsset(session, itemtype, form, hasPhysicalTag);
+        setCurrentId(id);
+        setSavedMsg(`${config.singular} creado en GLPI (#${id}).`);
+        onSaved(id);
+      } else {
+        await AssetService.updateAsset(session, itemtype, currentId, form, hasPhysicalTag);
+        setSavedMsg('Cambios guardados en GLPI.');
+        onSaved(currentId);
+      }
+      setOriginal(form);
+    } catch (err: any) {
+      setError(err.message || 'No se pudo guardar.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const textField = (key: 'name' | 'serial' | 'otherserial' | 'uuid' | 'physicalTag', label: string, icon: React.ReactNode, placeholder = '') => (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <div className="input-wrapper">
+        <span className="input-icon" style={{ display: 'flex' }}>{icon}</span>
+        <input
+          className="form-input"
+          value={form[key]}
+          onChange={e => set(key, e.target.value)}
+          placeholder={placeholder}
+          disabled={saving}
+          autoCapitalize={key === 'name' ? 'sentences' : 'characters'}
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </div>
+    </div>
+  );
+
+  const selectField = (key: 'states_id' | 'typeId' | 'manufacturers_id' | 'modelId' | 'locations_id' | 'users_id', label: string, options: DropdownOption[]) => (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <SearchSelect
+        label={label}
+        value={form[key]}
+        options={options}
+        loading={loadingDropdowns}
+        disabled={saving}
+        onChange={id => set(key, id)}
+      />
+    </div>
+  );
+
+  return (
+    <div className="animate-fade-in" style={{ paddingBottom: '80px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <button
+          type="button"
+          onClick={handleBack}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none',
+            color: 'var(--primary)', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer'
+          }}
+        >
+          <ArrowLeft size={18} /> {config.label}
+        </button>
+        {!isNew && <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>#{currentId}</span>}
+      </div>
+
+      <h2 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>
+        {isNew ? `Nuevo: ${config.singular}` : form.name || config.singular}
+      </h2>
+
+      {loadingAsset ? (
+        <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+          <RefreshCw className="spin" size={24} style={{ marginBottom: '8px' }} />
+          <div style={{ fontSize: '0.85rem' }}>Cargando activo de GLPI...</div>
+        </div>
+      ) : (
+        <>
+          <div className="card">
+            <div style={sectionTitle}>Identificación</div>
+            {textField('name', 'Nombre *', <Tag size={18} />, `Nombre del ${config.singular.toLowerCase()}`)}
+            {hasPhysicalTag && textField('physicalTag', 'Etiqueta física', <Barcode size={18} />, 'PC-000000')}
+            {textField('serial', 'Número de serie', <Hash size={18} />)}
+            {textField('otherserial', 'Número de inventario', <Hash size={18} />)}
+            {textField('uuid', 'UUID', <Fingerprint size={18} />)}
+          </div>
+
+          <div className="card">
+            <div style={sectionTitle}>Clasificación</div>
+            {selectField('states_id', 'Estado', dropdowns.states)}
+            {selectField('typeId', 'Tipo', dropdowns.types)}
+            {selectField('manufacturers_id', 'Fabricante', dropdowns.manufacturers)}
+            {selectField('modelId', 'Modelo', dropdowns.models)}
+          </div>
+
+          <div className="card">
+            <div style={sectionTitle}>Asignación</div>
+            {selectField('users_id', 'Usuario', dropdowns.users)}
+            {selectField('locations_id', 'Ubicación', dropdowns.locations)}
+          </div>
+
+          <div className="card">
+            <div style={sectionTitle}>Comentarios</div>
+            <textarea
+              className="form-input"
+              value={form.comment}
+              onChange={e => set('comment', e.target.value)}
+              rows={3}
+              disabled={saving}
+              style={{ resize: 'vertical', padding: '10px 12px' }}
+            />
+          </div>
+
+          {error && (
+            <div style={{ marginBottom: '10px', fontSize: '0.8rem', fontWeight: 600, color: '#dc2626' }}>{error}</div>
+          )}
+          {savedMsg && !dirty && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px', fontSize: '0.8rem', fontWeight: 700, color: '#059669' }}>
+              <CheckCircle2 size={16} /> {savedMsg}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={saving || (!dirty && !isNew)}
+            style={{ opacity: saving || (!dirty && !isNew) ? 0.6 : 1 }}
+          >
+            {saving ? <RefreshCw size={18} className="spin" /> : <Save size={18} />}
+            {isNew ? `Crear ${config.singular.toLowerCase()}` : 'Guardar cambios'}
+          </button>
+        </>
+      )}
+    </div>
+  );
+};

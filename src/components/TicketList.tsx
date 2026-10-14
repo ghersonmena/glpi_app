@@ -95,6 +95,29 @@ export const TicketList: React.FC<TicketListProps> = ({ session, onSelectTicket,
         >
           <RefreshCw size={18} className={refreshing ? 'spin' : ''} />
         </button>
+
+        {/* Alta de ticket: antes era una pestaña propia ("Nuevo"), ahora ocupada por Activos */}
+        <button
+          onClick={onCreateNew}
+          style={{
+            background: 'var(--primary-gradient)',
+            border: 'none',
+            borderRadius: 'var(--radius-md)',
+            padding: '0 14px',
+            color: '#fff',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '4px',
+            fontWeight: 700,
+            fontSize: '0.8rem',
+            boxShadow: 'var(--shadow-sm)'
+          }}
+          title="Crear ticket nuevo"
+        >
+          <Plus size={18} /> Nuevo
+        </button>
       </div>
 
       {/* Filtros rápidos por estado */}

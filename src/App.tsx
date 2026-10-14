@@ -12,6 +12,12 @@ import { Dashboard } from './components/Dashboard';
 import { Settings } from './components/Settings';
 import { ProjectList } from './components/ProjectList';
 import { ProjectTaskTree } from './components/ProjectTaskTree';
+import { AssetsScreen } from './components/AssetsScreen';
+import { useSwipeNavigation } from './hooks/useSwipeNavigation';
+import type { SlideDirection } from './hooks/useSwipeNavigation';
+
+// Orden de los módulos en la barra inferior; deslizar avanza o retrocede en este orden
+const TAB_ORDER: TabType[] = ['projects', 'tickets', 'assets', 'dashboard', 'settings'];
 
 // La sesión se guarda en localStorage (sobrevive a recargas y a cerrar la pestaña) y caduca
 // tras 1 hora sin actividad; cada interacción con la app renueva el plazo.
@@ -72,6 +78,27 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('projects');
   const [selectedTicket, setSelectedTicket] = useState<GLPITicket | null>(null);
   const [selectedProject, setSelectedProject] = useState<GLPIProject | null>(null);
+  // Dirección de la animación al cambiar de módulo y si Activos tiene abierto un formulario
+  const [slideDirection, setSlideDirection] = useState<SlideDirection>(null);
+  const [assetFormOpen, setAssetFormOpen] = useState<boolean>(false);
+
+  // Cambiar de módulo animando hacia el lado que corresponde según el orden de la barra
+  const goToTab = (tab: TabType) => {
+    const from = TAB_ORDER.indexOf(activeTab);
+    const to = TAB_ORDER.indexOf(tab);
+    setSlideDirection(from === -1 || to === -1 || from === to ? null : to > from ? 'next' : 'prev');
+    setActiveTab(tab);
+  };
+
+  const tabIndex = TAB_ORDER.indexOf(activeTab);
+  const swipe = useSwipeNavigation({
+    // Solo en las pantallas principales; no dentro de un proyecto, ticket o formulario de activo
+    enabled: !!session && !selectedProject && !selectedTicket && tabIndex !== -1 && !(activeTab === 'assets' && assetFormOpen),
+    hasPrev: tabIndex > 0,
+    hasNext: tabIndex !== -1 && tabIndex < TAB_ORDER.length - 1,
+    onPrev: () => goToTab(TAB_ORDER[tabIndex - 1]),
+    onNext: () => goToTab(TAB_ORDER[tabIndex + 1])
+  });
 
   // Guardar la sesión (con su caducidad) cada vez que cambia
   useEffect(() => {
@@ -154,7 +181,7 @@ export const App: React.FC = () => {
         title={getHeaderTitle()}
       />
 
-      <main className="app-content">
+      <main className="app-content" {...swipe.handlers}>
         {!session ? (
           <Login onLoginSuccess={handleLoginSuccess} />
         ) : selectedProject ? (
@@ -170,7 +197,11 @@ export const App: React.FC = () => {
             onBack={() => setSelectedTicket(null)}
           />
         ) : (
-          <>
+          <div
+            key={activeTab}
+            className={slideDirection === 'next' ? 'slide-in-next' : slideDirection === 'prev' ? 'slide-in-prev' : undefined}
+            style={swipe.contentStyle}
+          >
             {activeTab === 'projects' && (
               <ProjectList
                 session={session}
@@ -193,6 +224,10 @@ export const App: React.FC = () => {
               />
             )}
 
+            {activeTab === 'assets' && (
+              <AssetsScreen session={session} onFormOpenChange={setAssetFormOpen} />
+            )}
+
             {activeTab === 'dashboard' && (
               <Dashboard
                 session={session}
@@ -206,7 +241,7 @@ export const App: React.FC = () => {
                 onLogout={handleLogout}
               />
             )}
-          </>
+          </div>
         )}
       </main>
 
@@ -216,7 +251,7 @@ export const App: React.FC = () => {
           onChangeTab={(tab) => {
             setSelectedTicket(null);
             setSelectedProject(null);
-            setActiveTab(tab);
+            goToTab(tab);
           }}
         />
       )}
