@@ -3,6 +3,7 @@ import type { GLPISession } from '../types/glpi';
 import { AssetService, ASSET_TYPES, getAssetType } from '../services/assetService';
 import type { AssetSummary, SavedFilter } from '../services/assetService';
 import { AssetFormView } from './AssetFormView';
+import type { AssetTab } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
 import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User } from 'lucide-react';
 
@@ -10,6 +11,13 @@ interface AssetsScreenProps {
   session: GLPISession;
   // Avisa si hay un formulario abierto (para desactivar el cambio de módulo deslizando)
   onFormOpenChange?: (open: boolean) => void;
+}
+
+interface OpenAsset {
+  itemtype: string;
+  id: number | 'new';
+  tab?: AssetTab;     // pestaña a mostrar (al regresar a este activo)
+  backLabel?: string; // texto del botón de regreso
 }
 
 const normalize = (value: string) =>
@@ -25,12 +33,16 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<string>('');
-  // Activo abierto en el formulario: número = edición, 'new' = alta, null = listado
-  const [editing, setEditing] = useState<number | 'new' | null>(null);
+  // Pila de activos abiertos: el último es el visible. Al abrir un elemento conectado se apila
+  // y "regresar" vuelve al anterior (en la pestaña donde estaba); vacía = listado
+  const [stack, setStack] = useState<OpenAsset[]>([]);
+  const current = stack[stack.length - 1];
+
+  const openAsset = (entry: OpenAsset) => setStack(prev => [...prev, entry]);
 
   useEffect(() => {
-    onFormOpenChange?.(editing !== null);
-  }, [editing, onFormOpenChange]);
+    onFormOpenChange?.(stack.length > 0);
+  }, [stack.length, onFormOpenChange]);
   // Al salir del módulo, ya no hay formulario abierto
   useEffect(() => () => onFormOpenChange?.(false), [onFormOpenChange]);
 
@@ -93,15 +105,28 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
 
   const config = getAssetType(itemtype);
 
-  if (editing !== null) {
+  if (current) {
     return (
       <AssetFormView
-        key={`${itemtype}-${editing}`}
+        key={`${stack.length}-${current.itemtype}-${current.id}`}
         session={session}
-        itemtype={itemtype}
-        assetId={editing === 'new' ? null : editing}
-        onBack={() => { setEditing(null); load(); }}
+        itemtype={current.itemtype}
+        assetId={current.id === 'new' ? null : current.id}
+        initialTab={current.tab}
+        backLabel={current.backLabel}
+        onBack={() => {
+          setStack(prev => prev.slice(0, -1));
+          if (stack.length === 1) load();
+        }}
         onSaved={() => { /* el listado se recarga al volver */ }}
+        onOpenAsset={(linkedType, linkedId, fromTab, fromName) => {
+          // Recordar la pestaña del activo actual para volver a ella
+          setStack(prev => [
+            ...prev.slice(0, -1),
+            { ...prev[prev.length - 1], tab: fromTab },
+            { itemtype: linkedType, id: linkedId, backLabel: fromName }
+          ]);
+        }}
       />
     );
   }
@@ -237,7 +262,7 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
       <button
         type="button"
         className="btn-primary"
-        onClick={() => setEditing('new')}
+        onClick={() => openAsset({ itemtype, id: 'new' })}
         style={{ marginBottom: '14px' }}
       >
         <Plus size={18} /> Nuevo {config.singular.toLowerCase()}
@@ -263,7 +288,7 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
             <div
               key={asset.id}
               className="card card-interactive"
-              onClick={() => setEditing(asset.id)}
+              onClick={() => openAsset({ itemtype, id: asset.id })}
               style={{ padding: '12px 14px', marginBottom: '8px', cursor: 'pointer' }}
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>

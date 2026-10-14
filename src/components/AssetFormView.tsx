@@ -10,15 +10,19 @@ import { ItemPhotos } from './ItemPhotos';
 import { ComputerConnectionsSection, ItemConnectionSection } from './AssetConnections';
 import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine } from 'lucide-react';
 
+export type AssetTab = 'data' | 'hardware' | 'network' | 'photos' | 'connections';
+
 interface AssetFormViewProps {
   session: GLPISession;
   itemtype: string;
   assetId: number | null; // null = alta de un activo nuevo
   onBack: () => void;
   onSaved: (id: number) => void;
+  initialTab?: AssetTab;  // al regresar de un elemento conectado se vuelve a la pestaña donde estaba
+  backLabel?: string;     // texto del botón de regreso (por defecto, el tipo de activo)
+  // Abrir otro activo (p. ej. un dispositivo conectado); `fromTab` es la pestaña actual
+  onOpenAsset?: (itemtype: string, id: number, fromTab: AssetTab, fromName: string) => void;
 }
-
-type AssetTab = 'data' | 'hardware' | 'network' | 'photos' | 'connections';
 
 // Campos que se pueden llenar escaneando una etiqueta
 type ScannableField = 'physicalTag' | 'serial' | 'otherserial' | 'uuid';
@@ -41,7 +45,9 @@ const sectionTitle: React.CSSProperties = {
 };
 
 // Alta y edición de un activo (computadora, monitor, teléfono, dispositivo, impresora, equipo de red)
-export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype, assetId, onBack, onSaved }) => {
+export const AssetFormView: React.FC<AssetFormViewProps> = ({
+  session, itemtype, assetId, onBack, onSaved, initialTab, backLabel, onOpenAsset
+}) => {
   const config = getAssetType(itemtype);
   const [currentId, setCurrentId] = useState<number | null>(assetId);
   const [form, setForm] = useState<AssetForm>(emptyAssetForm());
@@ -49,7 +55,7 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
   // Campos del plugin Campos adicionales que tiene este tipo (etiqueta física, fechas)
   const [pluginFields, setPluginFields] = useState<PluginFieldKey[]>([]);
   // Pestañas en edición: datos editables, hardware (computadoras) y red (solo lectura)
-  const [tab, setTab] = useState<AssetTab>('data');
+  const [tab, setTab] = useState<AssetTab>(initialTab || 'data');
   // Campo que se está escaneando con la cámara (código de barras u OCR)
   const [scanning, setScanning] = useState<{ key: ScannableField; label: string } | null>(null);
   const [dropdowns, setDropdowns] = useState<Dropdowns>(emptyDropdowns);
@@ -101,6 +107,12 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
 
   const dirty = JSON.stringify(form) !== JSON.stringify(original);
   const isNew = currentId === null;
+
+  // Abrir un elemento conectado, avisando si hay cambios sin guardar en este
+  const openLinked = (linkedType: string, linkedId: number) => {
+    if (dirty && !window.confirm('Tienes cambios sin guardar en este activo. ¿Abrir el otro sin guardar?')) return;
+    onOpenAsset?.(linkedType, linkedId, tab, original.name || config.singular);
+  };
 
   const handleBack = () => {
     if (dirty && !window.confirm('Tienes cambios sin guardar. ¿Salir sin guardar?')) return;
@@ -210,7 +222,7 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
             color: 'var(--primary)', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer'
           }}
         >
-          <ArrowLeft size={18} /> {config.label}
+          <ArrowLeft size={18} /> {backLabel || config.label}
         </button>
         {!isNew && <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8' }}>#{currentId}</span>}
       </div>
@@ -264,8 +276,8 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({ session, itemtype,
       )}
       {!isNew && tab === 'connections' && currentId !== null && (
         itemtype === 'Computer'
-          ? <ComputerConnectionsSection session={session} itemtype={itemtype} assetId={currentId} assetName={original.name || `Computadora #${currentId}`} />
-          : <ItemConnectionSection session={session} itemtype={itemtype} assetId={currentId} assetName={original.name || `${config.singular} #${currentId}`} />
+          ? <ComputerConnectionsSection session={session} itemtype={itemtype} assetId={currentId} assetName={original.name || `Computadora #${currentId}`} onOpenAsset={onOpenAsset ? openLinked : undefined} />
+          : <ItemConnectionSection session={session} itemtype={itemtype} assetId={currentId} assetName={original.name || `${config.singular} #${currentId}`} onOpenAsset={onOpenAsset ? openLinked : undefined} />
       )}
       {!isNew && tab === 'photos' && currentId !== null && (
         <ItemPhotos

@@ -3,13 +3,15 @@ import { createPortal } from 'react-dom';
 import type { GLPISession } from '../types/glpi';
 import { AssetService, getAssetType, CONNECTABLE_TYPES } from '../services/assetService';
 import type { AssetConnection, AssetSummary } from '../services/assetService';
-import { RefreshCw, Plus, Unplug, Link2, Search, X, Monitor, Mouse, Phone, Printer, Laptop, ArrowRightLeft, Info } from 'lucide-react';
+import { RefreshCw, Plus, Unplug, Link2, Search, X, Monitor, Mouse, Phone, Printer, Laptop, ArrowRightLeft, Info, ChevronRight } from 'lucide-react';
 
 interface SectionProps {
   session: GLPISession;
   itemtype: string;
   assetId: number;
   assetName: string;
+  // Abrir el registro de un elemento conectado (detalles, pestañas, edición)
+  onOpenAsset?: (itemtype: string, id: number) => void;
 }
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -31,14 +33,28 @@ const AutoUpdateHint: React.FC = () => (
 );
 
 const ConnectionRow: React.FC<{
-  icon: React.ReactNode; name: string; detail?: string; typeLabel: string; busy: boolean; onDisconnect: () => void;
-}> = ({ icon, name, detail, typeLabel, busy, onDisconnect }) => (
+  icon: React.ReactNode; name: string; detail?: string; typeLabel: string; busy: boolean;
+  onDisconnect: () => void; onOpen?: () => void;
+}> = ({ icon, name, detail, typeLabel, busy, onDisconnect, onOpen }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderTop: '1px solid var(--border-color)' }}>
-    <span style={{ color: 'var(--primary)', display: 'flex', flexShrink: 0 }}>{icon}</span>
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: '0.86rem', fontWeight: 800, color: 'var(--text-main)', wordBreak: 'break-word' }}>{name}</div>
-      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '1px' }}>{[typeLabel, detail].filter(Boolean).join(' · ')}</div>
-    </div>
+    {/* Tocar el elemento abre su registro completo */}
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={!onOpen}
+      title={onOpen ? `Ver ${name}` : undefined}
+      style={{
+        flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '10px', padding: 0, border: 'none',
+        background: 'none', textAlign: 'left', fontFamily: 'inherit', cursor: onOpen ? 'pointer' : 'default'
+      }}
+    >
+      <span style={{ color: 'var(--primary)', display: 'flex', flexShrink: 0 }}>{icon}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: '0.86rem', fontWeight: 800, color: 'var(--text-main)', wordBreak: 'break-word' }}>{name}</span>
+        <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '1px' }}>{[typeLabel, detail].filter(Boolean).join(' · ')}</span>
+      </span>
+      {onOpen && <ChevronRight size={18} color="var(--text-muted)" style={{ flexShrink: 0 }} />}
+    </button>
     <button
       type="button"
       onClick={onDisconnect}
@@ -265,7 +281,7 @@ const ConnectPicker: React.FC<PickerProps> = ({ session, title, types, excludeCo
 };
 
 // ── Pestaña "Conexiones" de una computadora: sus monitores, dispositivos, teléfonos e impresoras
-export const ComputerConnectionsSection: React.FC<SectionProps> = ({ session, assetId, assetName }) => {
+export const ComputerConnectionsSection: React.FC<SectionProps> = ({ session, assetId, assetName, onOpenAsset }) => {
   const [connections, setConnections] = useState<AssetConnection[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyLink, setBusyLink] = useState<number | null>(null);
@@ -331,6 +347,7 @@ export const ComputerConnectionsSection: React.FC<SectionProps> = ({ session, as
               typeLabel={getAssetType(conn.itemtype).singular}
               busy={busyLink === conn.linkId}
               onDisconnect={() => disconnect(conn)}
+              onOpen={onOpenAsset ? () => onOpenAsset(conn.itemtype, conn.itemId) : undefined}
             />
           ))}
         </div>
@@ -351,7 +368,7 @@ export const ComputerConnectionsSection: React.FC<SectionProps> = ({ session, as
 };
 
 // ── Pestaña "Conexión" de un dispositivo: la computadora a la que está conectado
-export const ItemConnectionSection: React.FC<SectionProps> = ({ session, itemtype, assetId, assetName }) => {
+export const ItemConnectionSection: React.FC<SectionProps> = ({ session, itemtype, assetId, assetName, onOpenAsset }) => {
   const [connections, setConnections] = useState<AssetConnection[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyLink, setBusyLink] = useState<number | null>(null);
@@ -404,6 +421,7 @@ export const ItemConnectionSection: React.FC<SectionProps> = ({ session, itemtyp
               typeLabel="Computadora"
               busy={busyLink === conn.linkId}
               onDisconnect={() => disconnect(conn)}
+              onOpen={onOpenAsset ? () => onOpenAsset('Computer', conn.computerId) : undefined}
             />
           )) : (
             <div style={{ padding: '10px 0 2px', fontSize: '0.84rem', color: 'var(--text-muted)' }}>
