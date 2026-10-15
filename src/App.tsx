@@ -13,6 +13,7 @@ import { Settings } from './components/Settings';
 import { ProjectList } from './components/ProjectList';
 import { ProjectTaskTree } from './components/ProjectTaskTree';
 import { AssetsScreen } from './components/AssetsScreen';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useSwipeNavigation } from './hooks/useSwipeNavigation';
 import type { SlideDirection } from './hooks/useSwipeNavigation';
 
@@ -182,6 +183,7 @@ export const App: React.FC = () => {
       />
 
       <main className="app-content" {...swipe.handlers}>
+        <ErrorBoundary resetKey={`${activeTab}-${selectedProject?.id ?? ''}-${selectedTicket?.id ?? ''}`}>
         {!session ? (
           <Login onLoginSuccess={handleLoginSuccess} />
         ) : selectedProject ? (
@@ -243,6 +245,7 @@ export const App: React.FC = () => {
             )}
           </div>
         )}
+        </ErrorBoundary>
       </main>
 
       {session && !selectedTicket && !selectedProject && (

@@ -5,7 +5,8 @@ import type { AssetSummary, SavedFilter } from '../services/assetService';
 import { AssetFormView } from './AssetFormView';
 import type { AssetTab } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
-import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User } from 'lucide-react';
+import { FloorPlanView } from './FloorPlanView';
+import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
@@ -14,11 +15,22 @@ interface AssetsScreenProps {
 }
 
 interface OpenAsset {
+  kind?: 'asset';
   itemtype: string;
   id: number | 'new';
   tab?: AssetTab;     // pestaña a mostrar (al regresar a este activo)
   backLabel?: string; // texto del botón de regreso
 }
+
+// Croquis abierto: piso/área (null = elegir) y ubicación a resaltar
+interface OpenPlan {
+  kind: 'plan';
+  locationId: number | null;
+  focusLocationId?: number | null;
+  backLabel: string;
+}
+
+type StackEntry = OpenAsset | OpenPlan;
 
 const normalize = (value: string) =>
   value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -35,10 +47,10 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   const [search, setSearch] = useState<string>('');
   // Pila de activos abiertos: el último es el visible. Al abrir un elemento conectado se apila
   // y "regresar" vuelve al anterior (en la pestaña donde estaba); vacía = listado
-  const [stack, setStack] = useState<OpenAsset[]>([]);
+  const [stack, setStack] = useState<StackEntry[]>([]);
   const current = stack[stack.length - 1];
 
-  const openAsset = (entry: OpenAsset) => setStack(prev => [...prev, entry]);
+  const openAsset = (entry: StackEntry) => setStack(prev => [...prev, entry]);
 
   useEffect(() => {
     onFormOpenChange?.(stack.length > 0);
@@ -105,6 +117,25 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
 
   const config = getAssetType(itemtype);
 
+  const goBack = () => {
+    setStack(prev => prev.slice(0, -1));
+    if (stack.length === 1) load();
+  };
+
+  if (current && current.kind === 'plan') {
+    return (
+      <FloorPlanView
+        key={`${stack.length}-plan-${current.locationId}`}
+        session={session}
+        locationId={current.locationId}
+        focusLocationId={current.focusLocationId}
+        backLabel={current.backLabel}
+        onBack={goBack}
+        onOpenAsset={(linkedType, linkedId, fromName) => openAsset({ itemtype: linkedType, id: linkedId, backLabel: fromName })}
+      />
+    );
+  }
+
   if (current) {
     return (
       <AssetFormView
@@ -114,17 +145,21 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
         assetId={current.id === 'new' ? null : current.id}
         initialTab={current.tab}
         backLabel={current.backLabel}
-        onBack={() => {
-          setStack(prev => prev.slice(0, -1));
-          if (stack.length === 1) load();
-        }}
+        onBack={goBack}
         onSaved={() => { /* el listado se recarga al volver */ }}
         onOpenAsset={(linkedType, linkedId, fromTab, fromName) => {
           // Recordar la pestaña del activo actual para volver a ella
           setStack(prev => [
             ...prev.slice(0, -1),
-            { ...prev[prev.length - 1], tab: fromTab },
+            { ...(prev[prev.length - 1] as OpenAsset), tab: fromTab },
             { itemtype: linkedType, id: linkedId, backLabel: fromName }
+          ]);
+        }}
+        onOpenPlan={(planLocationId, focusLocationId, fromTab, fromName) => {
+          setStack(prev => [
+            ...prev.slice(0, -1),
+            { ...(prev[prev.length - 1] as OpenAsset), tab: fromTab },
+            { kind: 'plan', locationId: planLocationId, focusLocationId, backLabel: fromName }
           ]);
         }}
       />
@@ -145,9 +180,22 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   return (
     <div className="animate-fade-in">
       <div style={{ marginBottom: '14px' }}>
-        <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Package color="var(--primary)" size={22} /> Activos
-        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+          <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Package color="var(--primary)" size={22} /> Activos
+          </h2>
+          <button
+            type="button"
+            onClick={() => openAsset({ kind: 'plan', locationId: null, backLabel: 'Activos' })}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 12px', borderRadius: '12px',
+              border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--primary)',
+              fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', boxShadow: 'var(--shadow-sm)'
+            }}
+          >
+            <MapIcon size={16} /> Croquis
+          </button>
+        </div>
         <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '2px' }}>
           Registra y actualiza el inventario de GLPI
         </p>

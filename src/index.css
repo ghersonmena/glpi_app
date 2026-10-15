@@ -413,3 +413,14 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .scan-line { animation: none; top: 50%; }
 }
+
+/* Croquis: pulso alrededor de la ubicación resaltada */
+@keyframes pinPulse {
+  0%   { transform: translate(-50%, -50%) scale(0.4); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(2.6); opacity: 0; }
+}
+.pin-pulse {
+  position: absolute; left: 50%; top: 40%; width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(37, 99, 235, 0.45); animation: pinPulse 1.4s ease-out infinite; pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) { .pin-pulse { animation: none; opacity: 0.4; } }

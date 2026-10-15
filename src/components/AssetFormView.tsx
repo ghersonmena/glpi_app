@@ -8,7 +8,8 @@ import { AssetHardwareSection, AssetNetworkSection } from './AssetInfoSections';
 import { ScannerModal } from './ScannerModal';
 import { ItemPhotos } from './ItemPhotos';
 import { ComputerConnectionsSection, ItemConnectionSection } from './AssetConnections';
-import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine } from 'lucide-react';
+import { FloorPlanService } from '../services/floorPlanService';
+import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine, Map as MapIcon } from 'lucide-react';
 
 export type AssetTab = 'data' | 'hardware' | 'network' | 'photos' | 'connections';
 
@@ -22,6 +23,8 @@ interface AssetFormViewProps {
   backLabel?: string;     // texto del botón de regreso (por defecto, el tipo de activo)
   // Abrir otro activo (p. ej. un dispositivo conectado); `fromTab` es la pestaña actual
   onOpenAsset?: (itemtype: string, id: number, fromTab: AssetTab, fromName: string) => void;
+  // Abrir el croquis donde está la ubicación del activo
+  onOpenPlan?: (planLocationId: number, focusLocationId: number | null, fromTab: AssetTab, fromName: string) => void;
 }
 
 // Campos que se pueden llenar escaneando una etiqueta
@@ -46,7 +49,7 @@ const sectionTitle: React.CSSProperties = {
 
 // Alta y edición de un activo (computadora, monitor, teléfono, dispositivo, impresora, equipo de red)
 export const AssetFormView: React.FC<AssetFormViewProps> = ({
-  session, itemtype, assetId, onBack, onSaved, initialTab, backLabel, onOpenAsset
+  session, itemtype, assetId, onBack, onSaved, initialTab, backLabel, onOpenAsset, onOpenPlan
 }) => {
   const config = getAssetType(itemtype);
   const [currentId, setCurrentId] = useState<number | null>(assetId);
@@ -112,6 +115,24 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({
   const openLinked = (linkedType: string, linkedId: number) => {
     if (dirty && !window.confirm('Tienes cambios sin guardar en este activo. ¿Abrir el otro sin guardar?')) return;
     onOpenAsset?.(linkedType, linkedId, tab, original.name || config.singular);
+  };
+
+  // "Ver en croquis": busca el croquis del piso de la ubicación (o de sus ubicaciones superiores)
+  const [planLookup, setPlanLookup] = useState<string | null>(null);
+  const openPlan = async () => {
+    if (!onOpenPlan || !form.locations_id) return;
+    setPlanLookup('Buscando croquis...');
+    try {
+      const found = await FloorPlanService.findPlanFor(session, form.locations_id);
+      if (!found) {
+        setPlanLookup('Ningún piso de esta ubicación tiene croquis todavía. Créalo en Activos › Croquis.');
+        return;
+      }
+      setPlanLookup(null);
+      onOpenPlan(found.plan.locationId, found.focus, tab, original.name || config.singular);
+    } catch {
+      setPlanLookup('No se pudo buscar el croquis.');
+    }
   };
 
   const handleBack = () => {
@@ -339,6 +360,25 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({
             <div style={sectionTitle}>Asignación</div>
             {selectField('users_id', 'Usuario', dropdowns.users)}
             {selectField('locations_id', 'Ubicación', dropdowns.locations)}
+            {onOpenPlan && form.locations_id > 0 && (
+              <div style={{ marginTop: '-6px' }}>
+                <button
+                  type="button"
+                  onClick={openPlan}
+                  disabled={planLookup === 'Buscando croquis...'}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '12px',
+                    border: '1px solid rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.08)',
+                    color: 'var(--primary)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer'
+                  }}
+                >
+                  {planLookup === 'Buscando croquis...' ? <RefreshCw size={15} className="spin" /> : <MapIcon size={15} />} Ver en croquis
+                </button>
+                {planLookup && planLookup !== 'Buscando croquis...' && (
+                  <div style={{ marginTop: '6px', fontSize: '0.75rem', fontWeight: 600, color: '#b45309' }}>{planLookup}</div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="card">

@@ -612,6 +612,43 @@ export class AssetService {
     await this.connect(session, computerId, itemtype, itemId);
   }
 
+  /**
+   * Activos de todos los tipos que están en una ubicación o debajo de ella (búsqueda "under" de
+   * GLPI: una marca de "Hilera 5" muestra lo de sus posiciones).
+   */
+  static async listAssetsAtLocation(session: GLPISession, locationId: number): Promise<(AssetSummary & { itemtype: string })[]> {
+    if (session.isMock) {
+      return ASSET_TYPES.flatMap(t => (MOCK_ASSETS[t.itemtype] || [])
+        .filter(a => a.locations_id === locationId)
+        .map(a => ({ id: a.id, name: a.name, serial: a.serial, physicalTag: a.physicalTag, itemtype: t.itemtype })));
+    }
+    const lists = await Promise.all(ASSET_TYPES.map(async t => {
+      const params = new URLSearchParams({
+        'criteria[0][field]': SO.location,
+        'criteria[0][searchtype]': 'under',
+        'criteria[0][value]': String(locationId),
+        'forcedisplay[0]': SO.name,
+        'forcedisplay[1]': SO.id,
+        'forcedisplay[2]': SO.location,
+        'forcedisplay[3]': SO.serial,
+        range: '0-199',
+        sort: SO.name,
+        order: 'ASC'
+      });
+      const res = await fetch(`${session.baseUrl}/apirest.php/search/${t.itemtype}?${params}`, { headers: authHeaders(session) });
+      if (!res.ok) return [];
+      const rows: any[] = (await res.json())?.data || [];
+      return rows.map(row => ({
+        itemtype: t.itemtype,
+        id: Number(row[SO.id]),
+        name: row[SO.name] || `${t.singular} #${row[SO.id]}`,
+        serial: row[SO.serial] || undefined,
+        location: row[SO.location] || undefined
+      }));
+    }));
+    return lists.flat();
+  }
+
   /** Opciones de un desplegable de GLPI (se cachean durante la sesión). */
   static getDropdown(session: GLPISession, dropdownItemtype: string, visibilityField?: string): Promise<DropdownOption[]> {
     if (session.isMock) return Promise.resolve(MOCK_DROPDOWNS[dropdownItemtype] || []);
