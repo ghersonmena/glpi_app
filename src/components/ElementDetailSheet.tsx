@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { GLPISession, LinkedElement, ElementDetails } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
-import { RefreshCw, X, Monitor, Tag, MapPin, Box, Hash, User } from 'lucide-react';
+import { FloorPlanService } from '../services/floorPlanService';
+import { FloorPlanView } from './FloorPlanView';
+import { RefreshCw, X, Monitor, Tag, MapPin, Box, Hash, User, Map as MapIcon } from 'lucide-react';
 
 interface ElementDetailSheetProps {
   session: GLPISession;
@@ -40,6 +42,26 @@ export const ElementDetailSheet: React.FC<ElementDetailSheetProps> = ({ session,
   const [details, setDetails] = useState<ElementDetails[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  // Croquis abierto (piso + ubicación a resaltar) y estado de la búsqueda por equipo
+  const [plan, setPlan] = useState<{ locationId: number; focus: number | null; name: string } | null>(null);
+  const [planStatus, setPlanStatus] = useState<Record<string, string>>({});
+
+  const openPlan = async (detail: ElementDetails) => {
+    if (!detail.locationId) return;
+    const key = `${detail.itemtype}#${detail.id}`;
+    setPlanStatus(prev => ({ ...prev, [key]: 'Buscando croquis...' }));
+    try {
+      const found = await FloorPlanService.findPlanFor(session, detail.locationId);
+      if (!found) {
+        setPlanStatus(prev => ({ ...prev, [key]: 'Ningún piso de esta ubicación tiene croquis todavía.' }));
+        return;
+      }
+      setPlanStatus(prev => ({ ...prev, [key]: '' }));
+      setPlan({ locationId: found.plan.locationId, focus: found.focus, name: detail.name });
+    } catch {
+      setPlanStatus(prev => ({ ...prev, [key]: 'No se pudo buscar el croquis.' }));
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -113,10 +135,53 @@ export const ElementDetailSheet: React.FC<ElementDetailSheetProps> = ({ session,
               )}
               <DetailRow icon={<Hash size={16} />} label="Número de serie" value={detail.serial} />
               <DetailRow icon={<MapPin size={16} />} label="Ubicación" value={detail.location} />
+              {detail.locationId && (
+                <div style={{ padding: '2px 0 12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => openPlan(detail)}
+                    disabled={planStatus[`${detail.itemtype}#${detail.id}`] === 'Buscando croquis...'}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 12px', borderRadius: '12px',
+                      border: '1px solid rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.08)',
+                      color: 'var(--primary)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer'
+                    }}
+                  >
+                    {planStatus[`${detail.itemtype}#${detail.id}`] === 'Buscando croquis...'
+                      ? <RefreshCw size={15} className="spin" />
+                      : <MapIcon size={15} />} Ver en croquis
+                  </button>
+                  {planStatus[`${detail.itemtype}#${detail.id}`] && planStatus[`${detail.itemtype}#${detail.id}`] !== 'Buscando croquis...' && (
+                    <div style={{ marginTop: '6px', fontSize: '0.75rem', fontWeight: 600, color: '#b45309' }}>
+                      {planStatus[`${detail.itemtype}#${detail.id}`]}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
+
+      {/* Croquis a pantalla completa encima del proyecto; "regresar" vuelve a la ficha */}
+      {plan && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1050, overflowY: 'auto', background: 'var(--bg-main)',
+            padding: 'calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px))'
+          }}
+        >
+          <div style={{ maxWidth: '520px', margin: '0 auto' }}>
+            <FloorPlanView
+              session={session}
+              locationId={plan.locationId}
+              focusLocationId={plan.focus}
+              backLabel={plan.name}
+              onBack={() => setPlan(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>,
     document.body
   );

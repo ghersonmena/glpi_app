@@ -1469,18 +1469,20 @@ export class GLPIService {
 
     const headers = { 'App-Token': session.appToken, 'Session-Token': session.sessionToken };
 
-    // Nombre completo (Nombre(s) + Apellido) del usuario asignado al equipo. El buscador solo
-    // da el login, así que se lee users_id de la ficha y luego la ficha del usuario.
-    const resolveAssignedUser = async (): Promise<string | undefined> => {
+    // De la ficha sin expandir salen los IDs: el del usuario asignado (para su nombre completo:
+    // el buscador solo da el login) y el de la ubicación (para abrirla en el croquis)
+    const resolveRefs = async (): Promise<{ userName?: string; locationId?: number }> => {
       try {
         const itemRes = await fetch(`${session.baseUrl}/apirest.php/${element.itemtype}/${element.id}`, { headers });
-        if (!itemRes.ok) return undefined;
-        const userId = Number((await itemRes.json())?.users_id) || 0;
-        if (!userId) return undefined;
+        if (!itemRes.ok) return {};
+        const raw = await itemRes.json();
+        const locationId = Number(raw?.locations_id) || undefined;
+        const userId = Number(raw?.users_id) || 0;
+        if (!userId) return { locationId };
         const userRes = await fetch(`${session.baseUrl}/apirest.php/User/${userId}`, { headers });
-        return userRes.ok ? this.userDisplayName(await userRes.json()) : undefined;
+        return { locationId, userName: userRes.ok ? this.userDisplayName(await userRes.json()) : undefined };
       } catch {
-        return undefined;
+        return {};
       }
     };
 
@@ -1497,9 +1499,9 @@ export class GLPIService {
         'forcedisplay[2]': '5'
       });
       if (tagOption) params.set('forcedisplay[3]', tagOption);
-      const [res, userName] = await Promise.all([
+      const [res, refs] = await Promise.all([
         fetch(`${session.baseUrl}/apirest.php/search/Computer?${params}`, { headers }),
-        resolveAssignedUser()
+        resolveRefs()
       ]);
       if (res.ok) {
         const row = (await res.json())?.data?.[0];
@@ -1508,8 +1510,9 @@ export class GLPIService {
             ...element,
             name: row['1'] || `Computadora #${element.id}`,
             location: row['3'] || undefined,
+            locationId: refs.locationId,
             serial: row['5'] || undefined,
-            userName,
+            userName: refs.userName,
             physicalTag: tagOption ? row[tagOption] || undefined : undefined
           };
         }
@@ -1517,9 +1520,9 @@ export class GLPIService {
     }
 
     // Otros tipos (o si el buscador falla): ficha directa con la ubicación expandida
-    const [res, userName] = await Promise.all([
+    const [res, refs] = await Promise.all([
       fetch(`${session.baseUrl}/apirest.php/${element.itemtype}/${element.id}?expand_dropdowns=true`, { headers }),
-      resolveAssignedUser()
+      resolveRefs()
     ]);
     if (!res.ok) throw new Error(`No se pudo consultar el elemento (${res.status})`);
     const item = await res.json();
@@ -1530,8 +1533,9 @@ export class GLPIService {
       ...element,
       name: item.name || `${element.itemtype} #${element.id}`,
       serial: item.serial || undefined,
-      userName,
-      location
+      userName: refs.userName,
+      location,
+      locationId: refs.locationId
     };
   }
 
@@ -1703,7 +1707,8 @@ const MOCK_ELEMENT_DETAILS: Record<string, ElementDetails> = {
     physicalTag: 'PC-000103',
     serial: 'MXL1234ABC',
     userName: 'Gherson Eliezer Mena Alvarado',
-    location: 'Oficinas ACERO > Planta Baja > Sistemas > 8 Posicion'
+    location: 'Oficinas ACERO > Planta Baja > Sistemas > 8 Posicion',
+    locationId: 1
   }
 };
 

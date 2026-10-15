@@ -161,4 +161,5 @@ export interface ElementDetails {
   serial?: string;      // número de serie
   userName?: string;    // usuario que tiene asignado el equipo
   location?: string;    // ruta completa de la ubicación
+  locationId?: number;  // id de la ubicación (para abrirla en el croquis)
 }

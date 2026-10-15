@@ -168,7 +168,7 @@ export class FloorPlanService {
       const doc = await docRes.json();
       const markers = parseMarkers(doc.comment);
       if (markers && String(doc.mime || '').startsWith('image/')) {
-        return { documentId: Number(doc.id), locationId, name: doc.name || 'Croquis', markers, rawComment: String(doc.comment || '') };
+        return { documentId: Number(doc.id), locationId, name: GLPIService.htmlToPlainText(String(doc.name || 'Croquis')), markers, rawComment: String(doc.comment || '') };
       }
     }
     return null;
@@ -187,7 +187,7 @@ export class FloorPlanService {
       const linkRes = await fetch(`${session.baseUrl}/apirest.php/Document/${doc.id}/Document_Item?range=0-50`, { headers: headers(session) });
       const links = linkRes.ok ? await linkRes.json() : [];
       const location = Array.isArray(links) ? links.find((l: any) => l.itemtype === 'Location') : null;
-      return location ? { documentId: Number(doc.id), locationId: Number(location.items_id), name: String(doc.name || 'Croquis') } : null;
+      return location ? { documentId: Number(doc.id), locationId: Number(location.items_id), name: GLPIService.htmlToPlainText(String(doc.name || 'Croquis')) } : null;
     }));
     return plans.filter(Boolean) as { documentId: number; locationId: number; name: string }[];
   }

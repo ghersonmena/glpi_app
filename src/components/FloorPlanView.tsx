@@ -18,7 +18,8 @@ interface FloorPlanViewProps {
   focusLocationId?: number | null; // ubicación a resaltar (p. ej. la del activo)
   backLabel: string;
   onBack: () => void;
-  onOpenAsset: (itemtype: string, id: number, fromName: string) => void;
+  // Sin esta función (p. ej. desde un proyecto) los activos de cada marca solo se listan
+  onOpenAsset?: (itemtype: string, id: number, fromName: string) => void;
 }
 
 interface View { tx: number; ty: number; s: number }
@@ -628,15 +629,15 @@ export const FloorPlanView: React.FC<FloorPlanViewProps> = ({ session, locationI
                   ) : assetsHere.length === 0 ? (
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No hay activos registrados en esta ubicación.</div>
                   ) : assetsHere.map(a => (
-                    <button key={`${a.itemtype}-${a.id}`} type="button" onClick={() => onOpenAsset(a.itemtype, a.id, floor?.name || 'Croquis')}
-                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 0', border: 'none', borderTop: '1px solid var(--border-color)', background: 'none', textAlign: 'left', cursor: 'pointer' }}>
+                    <button key={`${a.itemtype}-${a.id}`} type="button" disabled={!onOpenAsset} onClick={() => onOpenAsset?.(a.itemtype, a.id, floor?.name || 'Croquis')}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 0', border: 'none', borderTop: '1px solid var(--border-color)', background: 'none', textAlign: 'left', cursor: onOpenAsset ? 'pointer' : 'default' }}>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>{a.name}</span>
                         <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                           {[getAssetType(a.itemtype).singular, a.serial && `S/N ${a.serial}`].filter(Boolean).join(' · ')}
                         </span>
                       </span>
-                      <ChevronRight size={16} color="var(--text-muted)" />
+                      {onOpenAsset && <ChevronRight size={16} color="var(--text-muted)" />}
                     </button>
                   ))}
                 </div>
