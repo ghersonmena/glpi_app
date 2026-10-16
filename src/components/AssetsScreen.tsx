@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { GLPISession } from '../types/glpi';
-import { AssetService, ASSET_TYPES, getAssetType } from '../services/assetService';
+import { AssetService, ASSET_TYPES, getAssetType, CONNECTABLE_TYPES } from '../services/assetService';
 import type { AssetSummary, SavedFilter } from '../services/assetService';
 import { AssetFormView } from './AssetFormView';
 import type { AssetTab } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
 import { FloorPlanView } from './FloorPlanView';
 import { ScannerModal } from './ScannerModal';
-import { Search, RefreshCw, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon, ScanLine } from 'lucide-react';
+import { Search, RefreshCw, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon, ScanLine, Plug, Unplug } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
@@ -73,6 +73,32 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
 
   // Cambiar este número vuelve a consultar el listado (botón actualizar, regreso del formulario)
   const [reloadKey, setReloadKey] = useState<number>(0);
+
+  // Monitores, teléfonos, dispositivos e impresoras: a qué computadora está conectado cada uno
+  // (id del activo → nombre de la computadora). Se guarda con su tipo para no mostrar datos
+  // de otro tipo mientras carga.
+  const [connections, setConnections] = useState<{ itemtype: string; byItem: Map<number, string> } | null>(null);
+  const isConnectable = CONNECTABLE_TYPES.includes(itemtype);
+
+  useEffect(() => {
+    if (!CONNECTABLE_TYPES.includes(itemtype)) return;
+    let cancelled = false;
+    // Todas las conexiones en una sola descarga (no una consulta por activo)
+    Promise.all([AssetService.getAllConnections(session), AssetService.listAssets(session, 'Computer')])
+      .then(([links, computers]) => {
+        if (cancelled) return;
+        const names = new Map(computers.map(c => [c.id, c.name]));
+        const byItem = new Map<number, string>();
+        links.filter(l => l.itemtype === itemtype).forEach(l => {
+          byItem.set(l.itemId, names.get(l.computerId) || `Computadora #${l.computerId}`);
+        });
+        setConnections({ itemtype, byItem });
+      })
+      .catch(() => { /* sin datos de conexión: simplemente no se muestra el indicador */ });
+    return () => { cancelled = true; };
+  }, [session, itemtype, reloadKey]);
+
+  const connectionsReady = isConnectable && connections?.itemtype === itemtype;
 
   // Búsquedas guardadas de GLPI por tipo y filtro activo por tipo.
   // activeFilters[tipo] === undefined → aún no se decide (se aplica la predeterminada ⭐ al cargar)
@@ -391,6 +417,18 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
                 )}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: '6px', fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                {/* Conectado (verde, con la computadora) o sin conectar (rojo) */}
+                {connectionsReady && (connections!.byItem.has(asset.id) ? (
+                  <span title={`Conectado a ${connections!.byItem.get(asset.id)}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success, #059669)' }}>
+                    <Plug size={13} strokeWidth={2.5} /> {connections!.byItem.get(asset.id)}
+                  </span>
+                ) : (
+                  <span title="No está conectado a ninguna computadora"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#dc2626' }}>
+                    <Unplug size={13} strokeWidth={2.5} /> Sin conectar
+                  </span>
+                ))}
                 {asset.physicalTag && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#8b5cf6' }}><Barcode size={12} /> {asset.physicalTag}</span>}
                 {asset.userName && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--text-main)' }}><User size={12} /> {asset.userName}</span>}
                 {asset.serial && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Hash size={12} /> {asset.serial}</span>}
