@@ -1,20 +1,35 @@
 import React from 'react';
 import type { GLPISession } from '../types/glpi';
-import { LogOut, ShieldCheck, Sparkles } from 'lucide-react';
+import { ShieldCheck, Sparkles, Menu } from 'lucide-react';
 
 interface HeaderProps {
   session: GLPISession | null;
-  onLogout: () => void;
   title?: string;
+  onMenu?: () => void; // abre el menú lateral (☰)
 }
 
-export const Header: React.FC<HeaderProps> = ({ session, onLogout, title }) => {
+export const Header: React.FC<HeaderProps> = ({ session, title, onMenu }) => {
   return (
     <header className="app-header">
       <div className="brand-badge">
-        <div className="brand-logo">
-          GL
-        </div>
+        {session && onMenu ? (
+          <button
+            type="button"
+            onClick={onMenu}
+            aria-label="Abrir menú"
+            title="Menú"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px',
+              border: 'none', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.1)', color: 'var(--primary)', cursor: 'pointer'
+            }}
+          >
+            <Menu size={22} />
+          </button>
+        ) : (
+          <div className="brand-logo">
+            GL
+          </div>
+        )}
         <div>
           <div className="brand-title">{title || 'GLPI Mobile'}</div>
           {session && (
@@ -37,23 +52,6 @@ export const Header: React.FC<HeaderProps> = ({ session, onLogout, title }) => {
               <Sparkles size={10} /> MOCK DEMO
             </span>
           )}
-          <button
-            onClick={onLogout}
-            style={{
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: 'none',
-              color: '#ef4444',
-              padding: '8px',
-              borderRadius: '10px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-            title="Cerrar Sesión"
-          >
-            <LogOut size={18} />
-          </button>
         </div>
       )}
     </header>

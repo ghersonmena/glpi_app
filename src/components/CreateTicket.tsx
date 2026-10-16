@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import type { GLPISession } from '../types/glpi';
 import { GLPIService } from '../services/glpiService';
-import { PlusCircle, FileText, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { PlusCircle, FileText, Loader2, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
 
 interface CreateTicketProps {
   session: GLPISession;
   onTicketCreated: () => void;
+  onBack: () => void; // regresar a Tickets sin crear el ticket
 }
 
-export const CreateTicket: React.FC<CreateTicketProps> = ({ session, onTicketCreated }) => {
+export const CreateTicket: React.FC<CreateTicketProps> = ({ session, onTicketCreated, onBack }) => {
   const [name, setName] = useState<string>('');
   const [content, setContent] = useState<string>('');
   const [urgency, setUrgency] = useState<number>(3); // Media por defecto
@@ -54,8 +55,25 @@ export const CreateTicket: React.FC<CreateTicketProps> = ({ session, onTicketCre
     { level: 5, label: 'Urgente', color: '#ef4444' }
   ];
 
+  // Regresar a Tickets; si ya se escribió algo, confirmar antes de descartarlo
+  const handleBack = () => {
+    if ((name.trim() || content.trim()) && !success && !window.confirm('Tienes un ticket sin enviar. ¿Salir y descartarlo?')) return;
+    onBack();
+  };
+
   return (
     <div className="animate-fade-in">
+      <button
+        type="button"
+        onClick={handleBack}
+        disabled={submitting}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '12px', background: 'none', border: 'none',
+          color: 'var(--primary)', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer', padding: 0
+        }}
+      >
+        <ArrowLeft size={18} /> Tickets
+      </button>
       <div style={{ marginBottom: '18px' }}>
         <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-main)' }}>
           Nuevo Ticket de Soporte

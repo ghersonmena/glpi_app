@@ -134,49 +134,12 @@ body {
   letter-spacing: 0.5px;
 }
 
-/* Bottom Navigation Bar */
-.bottom-nav {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid var(--glass-border);
-  display: flex;
-  justify-content: space-around;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-}
-
-.nav-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.nav-item.active {
-  color: var(--primary);
-  background: rgba(59, 130, 246, 0.1);
-  transform: translateY(-2px);
-}
-
 /* Área de contenido principal */
 .app-content {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
+  /* espacio para que el botón "+" flotante no tape el final de las listas */
   padding-bottom: 90px;
 }
 
@@ -424,3 +387,48 @@ body {
   background: rgba(37, 99, 235, 0.45); animation: pinPulse 1.4s ease-out infinite; pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) { .pin-pulse { animation: none; opacity: 0.4; } }
+
+/* Botón flotante "+" (estilo Google): esquina inferior derecha de la app */
+.fab {
+  position: absolute;
+  right: 20px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--primary-gradient);
+  box-shadow: 0 10px 24px -6px rgba(37, 99, 235, 0.55), 0 4px 10px rgba(15, 23, 42, 0.2);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  animation: fabIn 0.2s ease-out;
+}
+.fab:active { transform: scale(0.92); }
+@keyframes fabIn {
+  from { transform: scale(0.6); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .fab { animation: none; } }
+
+/* Contenido de artículos de la base de conocimiento (HTML de GLPI, ya sanitizado) */
+.kb-content { font-size: 0.9rem; line-height: 1.6; color: var(--text-main); overflow-wrap: anywhere; }
+.kb-content h1 { font-size: 1.2rem; font-weight: 800; margin: 0 0 10px; }
+.kb-content h2 { font-size: 1.08rem; font-weight: 800; margin: 18px 0 8px; }
+.kb-content h3, .kb-content h4 { font-size: 0.98rem; font-weight: 800; margin: 16px 0 6px; }
+.kb-content p { margin: 0 0 10px; }
+.kb-content ul, .kb-content ol { margin: 0 0 10px 20px; }
+.kb-content li { margin-bottom: 4px; }
+.kb-content a { color: var(--primary); font-weight: 600; text-decoration: underline; }
+.kb-content img { max-width: 100% !important; height: auto !important; border-radius: 10px; border: 1px solid var(--border-color); margin: 8px 0; display: block; cursor: zoom-in; }
+.kb-content table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 0.8rem; display: block; overflow-x: auto; }
+.kb-content td, .kb-content th { border: 1px solid var(--border-color); padding: 6px 8px; vertical-align: top; }
+.kb-content th { background: var(--bg-main); font-weight: 800; }
+.kb-content code, .kb-content pre { font-family: monospace; font-size: 0.82rem; background: var(--bg-main); border-radius: 6px; }
+.kb-content code { padding: 1px 5px; }
+.kb-content pre { padding: 10px; overflow-x: auto; }
+.kb-content blockquote { border-left: 3px solid var(--primary); margin: 0 0 10px; padding: 4px 12px; color: var(--text-muted); }

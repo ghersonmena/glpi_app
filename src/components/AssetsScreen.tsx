@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { GLPISession } from '../types/glpi';
 import { AssetService, ASSET_TYPES, getAssetType } from '../services/assetService';
 import type { AssetSummary, SavedFilter } from '../services/assetService';
@@ -6,12 +6,14 @@ import { AssetFormView } from './AssetFormView';
 import type { AssetTab } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
 import { FloorPlanView } from './FloorPlanView';
-import { Search, RefreshCw, Plus, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon } from 'lucide-react';
+import { Search, RefreshCw, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
   // Avisa si hay un formulario abierto (para desactivar el cambio de módulo deslizando)
   onFormOpenChange?: (open: boolean) => void;
+  // Cada incremento (botón "+" flotante) abre el alta de un activo del tipo seleccionado
+  newAssetRequest?: number;
 }
 
 interface OpenAsset {
@@ -39,7 +41,7 @@ const normalize = (value: string) =>
 const shortLocation = (path?: string) => (path ? path.split('>').slice(-2).map(s => s.trim()).join(' › ') : '');
 
 // Módulo de Activos: listado por tipo con búsqueda, alta y edición
-export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenChange }) => {
+export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenChange, newAssetRequest = 0 }) => {
   const [itemtype, setItemtype] = useState<string>(ASSET_TYPES[0].itemtype);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -51,6 +53,14 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   const current = stack[stack.length - 1];
 
   const openAsset = (entry: StackEntry) => setStack(prev => [...prev, entry]);
+
+  // Botón "+" flotante: alta de un activo del tipo que esté seleccionado
+  const lastNewRequest = useRef(newAssetRequest);
+  useEffect(() => {
+    if (newAssetRequest === lastNewRequest.current) return;
+    lastNewRequest.current = newAssetRequest;
+    setStack(prev => [...prev, { itemtype, id: 'new' }]);
+  }, [newAssetRequest, itemtype]);
 
   useEffect(() => {
     onFormOpenChange?.(stack.length > 0);
@@ -307,14 +317,6 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
         />
       )}
 
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={() => openAsset({ itemtype, id: 'new' })}
-        style={{ marginBottom: '14px' }}
-      >
-        <Plus size={18} /> Nuevo {config.singular.toLowerCase()}
-      </button>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>

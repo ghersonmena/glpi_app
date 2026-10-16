@@ -2,8 +2,11 @@ import React, { useState, useEffect } from 'react';
 import type { GLPISession, GLPITicket, GLPIProject } from './types/glpi';
 import { GLPIService } from './services/glpiService';
 import { Header } from './components/Header';
-import { BottomNav } from './components/BottomNav';
-import type { TabType } from './components/BottomNav';
+import { NavDrawer } from './components/NavDrawer';
+import { NAV_ITEMS } from './navigation';
+import type { TabType } from './navigation';
+import { KnowledgeScreen } from './components/KnowledgeScreen';
+import { Plus } from 'lucide-react';
 import { Login } from './components/Login';
 import { TicketList } from './components/TicketList';
 import { TicketDetail } from './components/TicketDetail';
@@ -18,7 +21,7 @@ import { useSwipeNavigation } from './hooks/useSwipeNavigation';
 import type { SlideDirection } from './hooks/useSwipeNavigation';
 
 // Orden de los módulos en la barra inferior; deslizar avanza o retrocede en este orden
-const TAB_ORDER: TabType[] = ['projects', 'tickets', 'assets', 'dashboard', 'settings'];
+const TAB_ORDER: TabType[] = NAV_ITEMS.map(item => item.tab);
 
 // La sesión se guarda en localStorage (sobrevive a recargas y a cerrar la pestaña) y caduca
 // tras 1 hora sin actividad; cada interacción con la app renueva el plazo.
@@ -81,7 +84,13 @@ export const App: React.FC = () => {
   const [selectedProject, setSelectedProject] = useState<GLPIProject | null>(null);
   // Dirección de la animación al cambiar de módulo y si Activos tiene abierto un formulario
   const [slideDirection, setSlideDirection] = useState<SlideDirection>(null);
+  // Hay un detalle abierto dentro de Activos o Conocimiento (formulario, artículo): no se cambia
+  // de módulo deslizando ni se muestra el botón "+"
   const [assetFormOpen, setAssetFormOpen] = useState<boolean>(false);
+  const [articleOpen, setArticleOpen] = useState<boolean>(false);
+  const [menuOpen, setMenuOpen] = useState<boolean>(false);
+  // Cada incremento pide a Activos abrir el alta de un activo nuevo (botón "+")
+  const [newAssetRequest, setNewAssetRequest] = useState<number>(0);
 
   // Cambiar de módulo animando hacia el lado que corresponde según el orden de la barra
   const goToTab = (tab: TabType) => {
@@ -94,7 +103,8 @@ export const App: React.FC = () => {
   const tabIndex = TAB_ORDER.indexOf(activeTab);
   const swipe = useSwipeNavigation({
     // Solo en las pantallas principales; no dentro de un proyecto, ticket o formulario de activo
-    enabled: !!session && !selectedProject && !selectedTicket && tabIndex !== -1 && !(activeTab === 'assets' && assetFormOpen),
+    enabled: !!session && !selectedProject && !selectedTicket && tabIndex !== -1 && !menuOpen
+      && !(activeTab === 'assets' && assetFormOpen) && !(activeTab === 'knowledge' && articleOpen),
     hasPrev: tabIndex > 0,
     hasNext: tabIndex !== -1 && tabIndex < TAB_ORDER.length - 1,
     onPrev: () => goToTab(TAB_ORDER[tabIndex - 1]),
@@ -178,8 +188,8 @@ export const App: React.FC = () => {
     <div className="mobile-app-wrapper">
       <Header
         session={session}
-        onLogout={handleLogout}
         title={getHeaderTitle()}
+        onMenu={() => setMenuOpen(true)}
       />
 
       <main className="app-content" {...swipe.handlers}>
@@ -223,11 +233,16 @@ export const App: React.FC = () => {
               <CreateTicket
                 session={session}
                 onTicketCreated={() => setActiveTab('tickets')}
+                onBack={() => setActiveTab('tickets')}
               />
             )}
 
             {activeTab === 'assets' && (
-              <AssetsScreen session={session} onFormOpenChange={setAssetFormOpen} />
+              <AssetsScreen session={session} onFormOpenChange={setAssetFormOpen} newAssetRequest={newAssetRequest} />
+            )}
+
+            {activeTab === 'knowledge' && (
+              <KnowledgeScreen session={session} onArticleOpenChange={setArticleOpen} />
             )}
 
             {activeTab === 'dashboard' && (
@@ -248,10 +263,29 @@ export const App: React.FC = () => {
         </ErrorBoundary>
       </main>
 
-      {session && !selectedTicket && !selectedProject && (
-        <BottomNav
+      {/* Botón "+" flotante (estilo Google): nuevo ticket o nuevo activo según la sección */}
+      {session && !selectedTicket && !selectedProject && !menuOpen &&
+        (activeTab === 'tickets' || (activeTab === 'assets' && !assetFormOpen)) && (
+        <button
+          type="button"
+          className="fab"
+          onClick={() => (activeTab === 'tickets' ? setActiveTab('create') : setNewAssetRequest(n => n + 1))}
+          aria-label={activeTab === 'tickets' ? 'Nuevo ticket' : 'Nuevo activo'}
+          title={activeTab === 'tickets' ? 'Nuevo ticket' : 'Nuevo activo'}
+        >
+          <Plus size={28} strokeWidth={2.5} />
+        </button>
+      )}
+
+      {session && (
+        <NavDrawer
+          open={menuOpen}
+          session={session}
           activeTab={activeTab}
-          onChangeTab={(tab) => {
+          onClose={() => setMenuOpen(false)}
+          onLogout={() => { setMenuOpen(false); handleLogout(); }}
+          onSelect={(tab) => {
+            setMenuOpen(false);
             setSelectedTicket(null);
             setSelectedProject(null);
             goToTab(tab);
