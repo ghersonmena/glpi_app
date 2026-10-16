@@ -42,6 +42,19 @@ export interface AssetSummary {
   userName?: string; // usuario asignado: nombre completo (o login si no tiene nombre capturado)
 }
 
+// Puertos y características de un monitor: en GLPI son casillas (have_*). En la app se eligen
+// como etiquetas para no llenar el formulario de casillas.
+export const MONITOR_PORTS: { field: string; label: string }[] = [
+  { field: 'have_hdmi', label: 'HDMI' },
+  { field: 'have_displayport', label: 'DisplayPort' },
+  { field: 'have_dvi', label: 'DVI' },
+  { field: 'have_subd', label: 'VGA (D-Sub)' },
+  { field: 'have_bnc', label: 'BNC' },
+  { field: 'have_speaker', label: 'Bocinas' },
+  { field: 'have_micro', label: 'Micrófono' },
+  { field: 'have_pivot', label: 'Pivote' }
+];
+
 // Campos del plugin Campos adicionales (bloque "Etiqueta"). Solo se muestran y guardan en los
 // tipos de activo que tienen el bloque configurado (hoy: computadoras).
 export type PluginFieldKey = 'physicalTag' | 'acquisitionDate' | 'retirementDate';
@@ -67,11 +80,15 @@ export interface AssetForm {
   acquisitionDate: string; // "YYYY-MM-DD" o ""
   retirementDate: string;  // "YYYY-MM-DD" o ""
   comment: string;
+  // Solo monitores
+  size: string;            // pulgadas ("23.8"); "" = sin capturar
+  monitorPorts: string[];  // campos have_* marcados, en el orden de MONITOR_PORTS
 }
 
 export const emptyAssetForm = (): AssetForm => ({
   name: '', states_id: 0, typeId: 0, manufacturers_id: 0, modelId: 0, locations_id: 0,
-  users_id: 0, serial: '', otherserial: '', uuid: '', physicalTag: '', acquisitionDate: '', retirementDate: '', comment: ''
+  users_id: 0, serial: '', otherserial: '', uuid: '', physicalTag: '', acquisitionDate: '', retirementDate: '', comment: '',
+  size: '', monitorPorts: []
 });
 
 // Sistema operativo y hardware de un equipo (lo que llena el inventario automático de GLPI)
@@ -129,6 +146,16 @@ export interface DropdownOption {
 
 // Opciones de búsqueda estándar de GLPI para activos
 const SO = { name: '1', id: '2', location: '3', serial: '5', inventory: '6', state: '31', user: '70' };
+
+// Un activo por ID (defensa extra: un repetido confunde a React y deja tarjetas fantasma)
+const dedupeById = <T extends { id: number }>(list: T[]): T[] => {
+  const seen = new Set<number>();
+  return list.filter(item => (seen.has(item.id) ? false : (seen.add(item.id), true)));
+};
+
+// Por nombre, con números en orden natural ("PC-2" antes que "PC-10"); empates por ID
+const sortByName = <T extends { id: number; name: string }>(list: T[]): T[] =>
+  [...list].sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' }) || a.id - b.id);
 
 const authHeaders = (session: GLPISession) => ({
   'Content-Type': 'application/json',
@@ -283,9 +310,11 @@ export class AssetService {
     const pageSize = 50; // GLPI recorta cada respuesta a list_limit_max (50 por defecto)
 
     for (let start = 0; start < 20000; start += pageSize) {
-      // Criterios de la búsqueda guardada (si hay) + columnas, orden y página de la app
+      // Criterios de la búsqueda guardada (si hay) + columnas, orden y página de la app.
+      // Se pagina ordenando por ID (único): ordenar por nombre con nombres repetidos (25
+      // "Teclado Inalámbrico K220") hacía que un activo saliera en dos páginas y otro en ninguna
       const params = filter ? savedQueryToSearchParams(filter.query) : new URLSearchParams();
-      params.set('sort', SO.name);
+      params.set('sort', SO.id);
       params.set('order', 'ASC');
       params.set('range', `${start}-${start + pageSize - 1}`);
       display.forEach((opt, i) => params.set(`forcedisplay[${i}]`, opt));
@@ -315,7 +344,7 @@ export class AssetService {
       const total = Number(body?.totalcount) || 0;
       if (rows.length === 0 || result.length >= total) break;
     }
-    return result;
+    return sortByName(dedupeById(result));
   }
 
   /** Datos editables de un activo. */
@@ -362,7 +391,10 @@ export class AssetService {
       physicalTag: pluginValue('physicalTag'),
       acquisitionDate: pluginValue('acquisitionDate').slice(0, 10),
       retirementDate: pluginValue('retirementDate').slice(0, 10),
-      comment: item.comment || ''
+      comment: item.comment || '',
+      // GLPI guarda el tamaño como decimal ("23.80"); 0 significa sin capturar
+      size: Number(item.size) > 0 ? String(Number(item.size)) : '',
+      monitorPorts: itemtype === 'Monitor' ? MONITOR_PORTS.filter(p => Number(item[p.field]) === 1).map(p => p.field) : []
     };
   }
 
@@ -381,6 +413,11 @@ export class AssetService {
       uuid: form.uuid.trim(),
       comment: form.comment
     };
+    if (itemtype === 'Monitor') {
+      const inches = Number(form.size.replace(',', '.'));
+      input.size = Number.isFinite(inches) && inches > 0 ? inches : 0;
+      MONITOR_PORTS.forEach(p => { input[p.field] = form.monitorPorts.includes(p.field) ? 1 : 0; });
+    }
     // El plugin Campos adicionales guarda sus campos si vienen junto con los datos del activo
     pluginFields.forEach(fieldKey => {
       input[PLUGIN_FIELD_NAMES[fieldKey]] = form[fieldKey].trim();
@@ -623,28 +660,35 @@ export class AssetService {
         .map(a => ({ id: a.id, name: a.name, serial: a.serial, physicalTag: a.physicalTag, itemtype: t.itemtype })));
     }
     const lists = await Promise.all(ASSET_TYPES.map(async t => {
-      const params = new URLSearchParams({
-        'criteria[0][field]': SO.location,
-        'criteria[0][searchtype]': 'under',
-        'criteria[0][value]': String(locationId),
-        'forcedisplay[0]': SO.name,
-        'forcedisplay[1]': SO.id,
-        'forcedisplay[2]': SO.location,
-        'forcedisplay[3]': SO.serial,
-        range: '0-199',
-        sort: SO.name,
-        order: 'ASC'
-      });
-      const res = await fetch(`${session.baseUrl}/apirest.php/search/${t.itemtype}?${params}`, { headers: authHeaders(session) });
-      if (!res.ok) return [];
-      const rows: any[] = (await res.json())?.data || [];
-      return rows.map(row => ({
-        itemtype: t.itemtype,
-        id: Number(row[SO.id]),
-        name: row[SO.name] || `${t.singular} #${row[SO.id]}`,
-        serial: row[SO.serial] || undefined,
-        location: row[SO.location] || undefined
-      }));
+      const found: (AssetSummary & { itemtype: string })[] = [];
+      // GLPI entrega máximo 50 por respuesta: se recorren las páginas, ordenadas por ID (único)
+      for (let start = 0; start < 5000; start += 50) {
+        const params = new URLSearchParams({
+          'criteria[0][field]': SO.location,
+          'criteria[0][searchtype]': 'under',
+          'criteria[0][value]': String(locationId),
+          'forcedisplay[0]': SO.name,
+          'forcedisplay[1]': SO.id,
+          'forcedisplay[2]': SO.location,
+          'forcedisplay[3]': SO.serial,
+          range: `${start}-${start + 49}`,
+          sort: SO.id,
+          order: 'ASC'
+        });
+        const res = await fetch(`${session.baseUrl}/apirest.php/search/${t.itemtype}?${params}`, { headers: authHeaders(session) });
+        if (!res.ok) break;
+        const body = await res.json();
+        const rows: any[] = body?.data || [];
+        rows.forEach(row => found.push({
+          itemtype: t.itemtype,
+          id: Number(row[SO.id]),
+          name: row[SO.name] || `${t.singular} #${row[SO.id]}`,
+          serial: row[SO.serial] || undefined,
+          location: row[SO.location] || undefined
+        }));
+        if (rows.length === 0 || found.length >= (Number(body?.totalcount) || 0)) break;
+      }
+      return sortByName(dedupeById(found));
     }));
     return lists.flat();
   }

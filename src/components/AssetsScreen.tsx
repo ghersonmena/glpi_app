@@ -6,7 +6,8 @@ import { AssetFormView } from './AssetFormView';
 import type { AssetTab } from './AssetFormView';
 import { SavedFiltersModal } from './SavedFiltersModal';
 import { FloorPlanView } from './FloorPlanView';
-import { Search, RefreshCw, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon } from 'lucide-react';
+import { ScannerModal } from './ScannerModal';
+import { Search, RefreshCw, MapPin, Barcode, Hash, Package, ListFilter, X, Star, User, Map as MapIcon, ScanLine } from 'lucide-react';
 
 interface AssetsScreenProps {
   session: GLPISession;
@@ -47,6 +48,8 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<string>('');
+  // Escáner (código de barras, QR u OCR) para llenar la búsqueda
+  const [scanningSearch, setScanningSearch] = useState<boolean>(false);
   // Pila de activos abiertos: el último es el visible. Al abrir un elemento conectado se apila
   // y "regresar" vuelve al anterior (en la pestaña donde estaba); vacía = listado
   const [stack, setStack] = useState<StackEntry[]>([]);
@@ -241,14 +244,30 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
 
       {/* Búsqueda + alta */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-        <div className="input-wrapper" style={{ flex: 1 }}>
+        <div className="input-wrapper" style={{ flex: 1, minWidth: 0 }}>
           <Search className="input-icon" size={18} />
           <input
+            id="asset-search"
             className="form-input"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Nombre, etiqueta, serie, inventario, usuario..."
+            style={{ paddingRight: '48px' }}
           />
+          {/* Escanear la etiqueta del equipo para buscarlo */}
+          <button
+            type="button"
+            onClick={() => setScanningSearch(true)}
+            aria-label="Escanear para buscar"
+            title="Escanear código de barras, QR o texto"
+            style={{
+              position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)',
+              display: 'flex', padding: '7px', borderRadius: '10px', border: 'none',
+              background: 'rgba(59, 130, 246, 0.12)', color: 'var(--primary)', cursor: 'pointer'
+            }}
+          >
+            <ScanLine size={18} />
+          </button>
         </div>
         <button
           type="button"
@@ -303,6 +322,15 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
         </div>
       )}
 
+      {scanningSearch && (
+        <ScannerModal
+          fieldLabel={`Buscar ${config.label.toLowerCase()}`}
+          kind="alphanumeric"
+          onResult={value => setSearch(value)}
+          onClose={() => setScanningSearch(false)}
+        />
+      )}
+
       {filtersOpen && (
         <SavedFiltersModal
           session={session}
@@ -328,6 +356,17 @@ export const AssetsScreen: React.FC<AssetsScreenProps> = ({ session, onFormOpenC
       ) : filtered.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
           {query ? 'Sin coincidencias.' : activeFilter ? `Ningún activo cumple “${activeFilter.name}”.` : `No hay ${config.label.toLowerCase()} registrados.`}
+          {/* Lo escaneado/buscado puede existir fuera de la búsqueda guardada activa */}
+          {query && activeFilter && (
+            <div style={{ marginTop: '12px' }}>
+              <div style={{ fontSize: '0.78rem', marginBottom: '8px' }}>
+                Solo se buscó dentro de “{activeFilter.name}”.
+              </div>
+              <button type="button" className="btn-secondary" onClick={() => applyFilter(null)} style={{ width: 'auto', margin: '0 auto', padding: '8px 14px' }}>
+                Buscar sin filtro
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { GLPISession } from '../types/glpi';
-import { AssetService, getAssetType, emptyAssetForm, ASSET_PHOTO_CATEGORY, CONNECTABLE_TYPES } from '../services/assetService';
+import { AssetService, getAssetType, emptyAssetForm, ASSET_PHOTO_CATEGORY, CONNECTABLE_TYPES, MONITOR_PORTS } from '../services/assetService';
+import { TagSelect } from './TagSelect';
 import { GLPIService } from '../services/glpiService';
 import type { AssetForm, DropdownOption, PluginFieldKey } from '../services/assetService';
 import { SearchSelect } from './SearchSelect';
@@ -9,7 +10,7 @@ import { ScannerModal } from './ScannerModal';
 import { ItemPhotos } from './ItemPhotos';
 import { ComputerConnectionsSection, ItemConnectionSection } from './AssetConnections';
 import { FloorPlanService } from '../services/floorPlanService';
-import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine, Map as MapIcon } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Save, CheckCircle2, Tag, Hash, Barcode, Fingerprint, CalendarPlus, CalendarX, ScanLine, Map as MapIcon, Ruler } from 'lucide-react';
 
 export type AssetTab = 'data' | 'hardware' | 'network' | 'photos' | 'connections';
 
@@ -345,6 +346,38 @@ export const AssetFormView: React.FC<AssetFormViewProps> = ({
               <div style={sectionTitle}>Fechas</div>
               {pluginFields.includes('acquisitionDate') && dateField('acquisitionDate', 'Fecha de adquisición', <CalendarPlus size={18} />)}
               {pluginFields.includes('retirementDate') && dateField('retirementDate', 'Fecha de baja', <CalendarX size={18} />)}
+            </div>
+          )}
+
+          {itemtype === 'Monitor' && (
+            <div className="card">
+              <div style={sectionTitle}>Monitor</div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="monitor-size">Tamaño (pulgadas)</label>
+                <div className="input-wrapper">
+                  <span className="input-icon" style={{ display: 'flex' }}><Ruler size={18} /></span>
+                  <input
+                    id="monitor-size"
+                    className="form-input"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.size}
+                    onChange={e => set('size', e.target.value.replace(/[^0-9.,]/g, ''))}
+                    placeholder="23.8"
+                    disabled={saving}
+                  />
+                </div>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Puertos y características</label>
+                <TagSelect
+                  options={MONITOR_PORTS.map(p => ({ value: p.field, label: p.label }))}
+                  value={form.monitorPorts}
+                  onChange={ports => set('monitorPorts', ports)}
+                  disabled={saving}
+                  emptyText="Sin puertos indicados"
+                />
+              </div>
             </div>
           )}
 
